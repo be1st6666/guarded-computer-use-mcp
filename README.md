@@ -65,8 +65,24 @@ lands on, not the foreground window:
               "matched": "applicationframehost" } }
 ```
 
-Default deny lists cover password managers (`keepass`, `1password`, `bitwarden`, …)
-and sensitive window titles (`password`, `bank`, `pay`, `wallet`, `2fa`, …).
+### What is on the lists
+
+Four lists, all substring matches (case-insensitive), all in `policy.json`:
+
+| List | Behaviour | Default coverage |
+|---|---|---|
+| `deny_processes` (49) | **hard refusal, no override** | password managers, crypto wallets, `regedit`/`diskmgmt`/`diskpart`/`gpedit` |
+| `deny_window_titles` (31) | **hard refusal** | `password`, `bank`, `pay`, `wallet`, `转账`, `验证码`, `seed phrase`, UAC |
+| `approval_processes` (32) | every action pops the dialog | messaging (WeChat/QQ/Telegram/Slack…), mail, remote desktop (RDP/TeamViewer/AnyDesk…) |
+| `approval_window_titles` (8) | every action pops the dialog | `send`, `发送`, `remote desktop` |
+
+The split matters: a messaging app is **not** denied outright — you may want the
+agent to read or summarise it — but nothing is clicked there without you saying
+yes.
+
+`npm run test:policy` checks the lists against 29 samples and fails on false
+positives (a browser, Notepad, Blender and this repo's own harness must all pass
+cleanly).
 
 ---
 

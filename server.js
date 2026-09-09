@@ -189,7 +189,7 @@ function tool(name, config, fn) {
       const blocked = policyGuard(name, args, target);
       if (blocked) { await audit(name, args, blocked, target); return blocked; }
 
-      const check = safetyCheck(name, args);
+      const check = needsApproval(name, args, target);
       if (check) {
         if (sessionApprovals.has(approvalKey(name, target))) {
           // 用户在本会话里勾选了"记住这个目标"，直接放行
@@ -362,9 +362,16 @@ tool('batch', {
   const content = [];
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const check = safetyCheck(step.op, step.args ?? {});
+    const stepArgs = step.args ?? {};
+    const stepTarget = await resolveTarget(step.op, stepArgs);
+    const check = needsApproval(step.op, stepArgs, stepTarget);
     if (check) {
-      content.push({ type: 'text', text: `#${i + 1} ${step.op}: BLOCKED — ${check.reason} (pass confirm: true to proceed)` });
+      // 批处理里不弹窗（会打断整批），直接跳过该步并说明原因
+      content.push({
+        type: 'text',
+        text: `#${i + 1} ${step.op}: BLOCKED — ${check.reason} ` +
+              `(run it as a separate call so the approval dialog can appear)`,
+      });
       continue;
     }
     const fn = HANDLERS.get(step.op);
@@ -774,10 +781,23 @@ const DEFAULT_POLICY = {
   deny_processes: [
     'keepass', 'keepassxc', '1password', 'bitwarden', 'lastpass', 'dashlane',
     'nordpass', 'keeper', 'enpass', 'authenticator', 'windowssecurity',
+    'metamask', 'exodus', 'ledgerlive', 'trezor', 'electrum',
+    'regedit', 'diskmgmt', 'diskpart', 'gpedit', 'compmgmt', 'certmgr', 'mmc',
   ],
   deny_window_titles: [
-    '密码', 'password', '凭据', 'credential', '银行', 'bank', '支付', 'pay',
-    '钱包', 'wallet', '转账', 'transfer', '两步验证', '2fa', 'otp',
+    '密码', 'password', '凭据', 'credential', '助记词', 'seed phrase',
+    '银行', 'bank', '支付', 'pay', '钱包', 'wallet', '转账', 'transfer',
+    '两步验证', '2fa', 'otp', '验证码',
+    '用户账户控制', 'user account control',
+  ],
+  approval_processes: [
+    'weixin', 'wechat', 'qq', 'telegram', 'discord', 'whatsapp', 'signal',
+    'slack', 'teams', 'dingtalk', '飞书', 'feishu', 'lark',
+    'outlook', 'thunderbird', 'foxmail',
+    'mstsc', 'teamviewer', 'anydesk', 'todesk', 'sunflower', 'vnc', 'rustdesk',
+  ],
+  approval_window_titles: [
+    '发送', 'send', '远程桌面', 'remote desktop', '远程控制', 'remote control',
   ],
   allow_processes: [],           // 非空时：只允许操作这些进程
   max_actions_per_minute: 120,
@@ -1041,6 +1061,30 @@ function safetyCheck(name, args) {
     return { reason: 'right-click opens a context menu with destructive entries' };
   }
 
+  return null;
+}
+
+/**
+ * 是否需要人工审批。两个来源：
+ *   1. 动作本身的危险模式（safetyCheck）
+ *   2. 目标进程/窗口在"必须审批"名单里 —— 例如微信、邮件、远程桌面：
+ *      在那些地方一次误击就收不回来，所以任何动作都先问一声。
+ */
+function needsApproval(name, args, target) {
+  const patternCheck = safetyCheck(name, args);
+  if (patternCheck) return patternCheck;
+
+  if (!MUTATING.has(name)) return null;
+  if (!target || target.found === false) return null;
+
+  const proc = matchesAny(target.process, policy.approval_processes ?? []);
+  if (proc) {
+    return { reason: `process "${target.process}" always requires approval`, pattern: proc };
+  }
+  const title = matchesAny(target.title, policy.approval_window_titles ?? []);
+  if (title) {
+    return { reason: `window title "${target.title}" always requires approval`, pattern: title };
+  }
   return null;
 }
 

@@ -16,6 +16,7 @@
     "approval-toggle.ps1",
     "toggle-approval.cmd",
     "policy.json",
+    "test-policy.mjs",
     "README.md",
     "README.zh-CN.md",
     "LICENSE"
@@ -30,6 +31,7 @@
     "start": "node server.js",
     "test": "node test-client.js read",
     "test:uia": "node test-client.js uia",
+    "test:policy": "node test-policy.mjs",
     "bench": "node bench.js 5"
   },
   "keywords": [
