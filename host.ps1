@@ -93,6 +93,9 @@ public static class Dsh
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     delegate bool EnumProc(IntPtr h, IntPtr p);
 
@@ -351,8 +354,26 @@ public static class Dsh
     // ---------------- keyboard ----------------
     // Unicode injection: CJK, quotes and emoji go through verbatim, with no
     // string escaping anywhere in the path.
+    //
+    // Newlines and tabs are the exception: a raw U+000A pushed through
+    // KEYEVENTF_UNICODE is ignored by browsers and most text fields, so they
+    // are sent as real VK_RETURN / VK_TAB keystrokes instead.
+    static void SendVk(ushort vk) {
+        INPUT[] pair = new INPUT[2];
+        pair[0].type = INPUT_KEYBOARD;
+        pair[0].u.ki.wVk = vk;
+        pair[1].type = INPUT_KEYBOARD;
+        pair[1].u.ki.wVk = vk;
+        pair[1].u.ki.dwFlags = KEY_UP;
+        Send(pair);
+    }
+
     public static void TypeText(string textValue) {
         foreach (char c in textValue) {
+            if (c == '\r') continue;                       // CRLF -> LF
+            if (c == '\n') { SendVk(13); System.Threading.Thread.Sleep(6); continue; }
+            if (c == '\t') { SendVk(9); System.Threading.Thread.Sleep(6); continue; }
+
             INPUT[] pair = new INPUT[2];
             pair[0].type = INPUT_KEYBOARD;
             pair[0].u.ki.wScan = (ushort)c;
@@ -419,10 +440,29 @@ public static class Dsh
             return true;
         }, IntPtr.Zero);
         if (found == IntPtr.Zero) throw new Exception("window not found");
-        if (IsIconic(found)) ShowWindow(found, 9);
-        SetForegroundWindow(found);
+
+        // SetForegroundWindow alone is silently ignored unless the caller owns
+        // the current foreground window, which a background MCP host does not.
+        // Attaching to the foreground thread's input queue lifts that lock.
+        if (IsIconic(found)) ShowWindow(found, 9);            // SW_RESTORE
+        IntPtr fg = GetForegroundWindow();
+        uint dummy;
+        uint fgThread = GetWindowThreadProcessId(fg, out dummy);
+        uint thisThread = GetCurrentThreadId();
+        bool attached = false;
+        try {
+            if (fgThread != 0 && fgThread != thisThread) {
+                attached = AttachThreadInput(fgThread, thisThread, true);
+            }
+            BringWindowToTop(found);
+            SetForegroundWindow(found);
+        } finally {
+            if (attached) AttachThreadInput(fgThread, thisThread, false);
+        }
         System.Threading.Thread.Sleep(150);
-        return "{\"handle\":" + found.ToInt64() + ",\"title\":\"" + Esc(foundTitle) + "\"}";
+        bool ok = GetForegroundWindow() == found;
+        return "{\"handle\":" + found.ToInt64() + ",\"title\":\"" + Esc(foundTitle) +
+               "\",\"foreground\":" + (ok ? "true" : "false") + "}";
     }
 
     // ---------------- clipboard ----------------

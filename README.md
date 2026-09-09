@@ -122,6 +122,7 @@ else works without it.
 ```bash
 npm test              # read-only tools; no side effects, safe to run any time
 npm run test:policy   # the deny/approval lists, 29 samples
+npm run test:typing   # activate_window + multi-line type_text (launches Notepad)
 ```
 
 `npm test` prints a tick per tool plus its latency. If it lists tools and
@@ -356,6 +357,7 @@ Design notes:
 npm test                      # read-only tools, no side effects
 npm run test:uia              # accessibility tree + semantic search
 npm run test:policy           # deny/approval lists, 29 samples, fails on false positives
+npm run test:typing           # activate_window focus + multi-line/tab type_text
 npm run bench                 # latency + token table
 node test-client.js policy    # policy + audit behaviour end to end
 node test-client.js rapid     # Windows OCR vs RapidOCR on the same region

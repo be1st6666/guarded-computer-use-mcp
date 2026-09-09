@@ -19,6 +19,7 @@
     "guard-panel.cmd",
     "policy.json",
     "test-policy.mjs",
+    "test-typing.mjs",
     "README.md",
     "README.zh-CN.md",
     "CHANGELOG.md",
@@ -35,6 +36,7 @@
     "test": "node test-client.js read",
     "test:uia": "node test-client.js uia",
     "test:policy": "node test-policy.mjs",
+    "test:typing": "node test-typing.mjs",
     "bench": "node bench.js 5"
   },
   "keywords": [
