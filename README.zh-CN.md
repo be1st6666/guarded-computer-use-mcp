@@ -372,10 +372,13 @@ Codex 的 computer use 也不是连续视频流——它同样是"动作 → 截
    旧包走 `SendKeys` 字符串插值，输入 `it's` 就破坏 PowerShell 语法。
    本实现走 `SendInput` + `KEYEVENTF_UNICODE` 逐字符注入，中文、单引号、emoji 全部原样送出。
 
-3. **`host.ps1` 必须是纯 ASCII**
+3. **`host.ps1` / `ocr.ps1` 必须是纯 ASCII**
    Windows PowerShell 5.1 读取**无 BOM 的 .ps1 会按 ANSI 解码**，一个中文字符被拆成 GBK 字节后
    可能吞掉换行，把下一行代码并进注释里（我们真的踩到了）。
    校验：`((Get-Content .\host.ps1 -Encoding Byte -ReadCount 0) | Where-Object { $_ -gt 127 }).Count` 必须是 0。
+
+   例外是 `approval.ps1` / `approval-toggle.ps1` / `guard-panel.ps1`——它们要给用户显示中文，
+   所以**带 UTF-8 BOM** 保存，两种 shell 都能正确读取。
 
 4. **PowerShell 5.1 的 `ConvertFrom-Json` 处理不了几百 KB 的字符串**
    它会报 `Invalid object passed in, ':' or '}' expected`，而且**错误消息里会把整个 payload 带出来**

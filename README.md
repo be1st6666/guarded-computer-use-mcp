@@ -365,16 +365,16 @@ node test-client.js newtools  # launch_app, approval gate, OCR-driven click
 `docs/make-*.ps1` regenerate the README figures from a live screen, so the
 screenshots can be kept honest rather than hand-drawn.
 
-`host.ps1`, `ocr.ps1` and `approval.ps1` **must stay pure ASCII**: Windows
-PowerShell 5.1 reads `.ps1` as ANSI when there is no BOM, and a single non-ASCII
-byte can swallow a newline and corrupt the embedded C#. Verify with:
+`host.ps1` and `ocr.ps1` **must stay pure ASCII**: Windows PowerShell 5.1 reads
+`.ps1` as ANSI when there is no BOM, and a single non-ASCII byte can swallow a
+newline and corrupt the embedded C#. Verify with:
 
 ```powershell
 ((Get-Content .\host.ps1 -AsByteStream) | Where-Object { $_ -gt 127 }).Count   # must be 0
 ```
 
-`approval-toggle.ps1`, `guard-panel.ps1` and `approval.ps1` are the exception:
-they print Chinese to the user, so they are saved **with** a UTF-8 BOM, which
+`approval.ps1`, `approval-toggle.ps1` and `guard-panel.ps1` are the exception:
+they show Chinese to the user, so they are saved **with** a UTF-8 BOM, which
 both shells honour.
 
 ## Contributing
