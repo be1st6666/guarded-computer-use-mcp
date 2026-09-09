@@ -1,8 +1,64 @@
-# computer-use-mcp
+# guarded-computer-use-mcp
 
-自建的 Windows 桌面控制 MCP 服务。**没有任何第三方自动化代码**——所有能力由本目录的 `host.ps1`（C# + Win32）实现，唯一依赖是官方的 `@modelcontextprotocol/sdk`。
+[English](README.md) · 中文
 
-替代了之前的 `windows-computer-use-mcp`（0.1.1，周下载 67，我们修了它 3 个 bug）。
+**给智能体一双手，但不交出钥匙。**
+
+Windows 桌面控制 MCP 服务，**危险动作会停下来等真人点击**。26 个工具：截图、鼠标、键盘、UI Automation、OCR、窗口、剪贴板。
+
+**没有任何第三方自动化代码**——所有能力由本目录的 `host.ps1`（C# + Win32）实现，唯一依赖是官方的 `@modelcontextprotocol/sdk`。
+
+## 安装
+
+需要 **Windows 10/11** + **Node.js ≥ 18**：
+
+```bash
+git clone https://github.com/be1st6666/guarded-computer-use-mcp
+cd guarded-computer-use-mcp
+npm install
+```
+
+建议装 **PowerShell 7**（UTF-8 和 JSON 处理更好），没有会自动退回 Windows PowerShell 5.1。
+
+**OCR 可选**：需要 [`uv`](https://docs.astral.sh/uv/) 在 PATH 里。没有它其它功能照常工作。
+
+装完先自测：
+
+```bash
+npm test              # 只读工具，无副作用
+npm run test:policy   # 策略表，29 个样本
+```
+
+### 接进你的 MCP 客户端
+
+**Claude Desktop / Cursor / 任何 stdio 客户端**：
+
+```json
+{
+  "mcpServers": {
+    "computer": {
+      "command": "node",
+      "args": ["D:/path/to/guarded-computer-use-mcp/server.js"]
+    }
+  }
+}
+```
+
+**DeepSeek Harness (DSH)** —— 加到 `$DSH_HOME/profiles/web/cordis.patch.yml`：
+
+```yaml
+- insert:
+    - id: mcp-computer-use
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: computer
+        transport: stdio
+        command: C:/Program Files/nodejs/node.exe
+        args:
+          - D:/path/to/guarded-computer-use-mcp/server.js
+```
+
+工具会以 `mcp__computer__<名字>` 出现。
 
 ## 文件
 
@@ -12,9 +68,12 @@
 | `host.ps1` | 常驻 PowerShell 宿主 + C# 帮助类（**必须保持纯 ASCII**，见下） |
 | `ocr.ps1` | Windows 自带 OCR 后端（只能跑在 PowerShell 5.1） |
 | `ocr_rapid.py` | RapidOCR 后端（PaddleOCR 模型 + ONNXRuntime，中文强） |
-| `test-client.js` | 独立测试客户端（`read` / `notepad` / `advanced` / `uia` / `newtools` / `rapid`） |
+| `approval.ps1` | 审批对话框 |
+| `guard-panel.ps1` / `.cmd` | 三个防护开关的面板 |
+| `policy.json` | 四张策略表 |
+| `test-client.js` | 测试客户端（`read` / `notepad` / `advanced` / `uia` / `newtools` / `rapid` / `policy`） |
+| `test-policy.mjs` | 策略表匹配自测 |
 | `bench.js` | 逐 op 延迟 + token 成本基准 |
-| `package.json` | 只依赖 `@modelcontextprotocol/sdk` |
 
 ## 架构
 
@@ -196,25 +255,20 @@ ONNXRuntime 和模型（约 70MB，之后走缓存）。
 ### 策略与审计（爆炸半径控制）
 
 **"控制真机" 和 "完全隔离" 架构上互斥**——Codex 能隔离，是因为它控制的是沙箱里的桌面，不是你的。
-所以这里做的是**压缩爆炸半径**，配置文件 `policy.json`：
+所以这里做的是**压缩爆炸半径**。`policy.json` 里有**四张表**，全部是子串匹配、大小写不敏感：
 
-```json
-{
-  "deny_processes": ["keepass", "1password", "bitwarden", "..."],
-  "deny_window_titles": ["密码", "password", "银行", "bank", "支付", "pay", "..."],
-  "allow_processes": [],
-  "max_actions_per_minute": 120,
-  "audit": true
-}
-```
+| 表 | 行为 | 默认覆盖 | 条目 |
+|---|---|---|---|
+| `deny_processes` | **硬拒绝，无法绕过** | 密码管理器、加密钱包、`regedit`/`diskmgmt`/`diskpart`/`gpedit` | 49 |
+| `deny_window_titles` | **硬拒绝** | `password`/`bank`/`pay`/`wallet`/`转账`/`验证码`/助记词/UAC | 31 |
+| `approval_processes` | **每个动作都弹窗** | 通讯（微信/QQ/Telegram/Slack…）、邮件、远程桌面 | 32 |
+| `approval_window_titles` | **每个动作都弹窗** | `send`/`发送`/`remote desktop` | 8 |
 
-| 机制 | 作用 |
-|---|---|
-| **进程黑名单** | 拒绝把输入送进密码管理器 / 银行 / 支付类窗口 |
-| **窗口标题黑名单** | 标题含敏感词的窗口一律不动 |
-| **进程白名单**（可选） | 非空时只允许操作列出的进程 |
-| **速率限制** | 每分钟动作数上限，防跑飞 |
-| **审计日志** | 每个动作连同**目标进程**写进 `audit.jsonl` |
+**为什么要拆成两档**：微信这类应用**不该被完全禁止**（你可能想让我读或总结消息），
+但也不该被随便点击——所以它进"必须审批"而不是"禁止"。
+
+`npm run test:policy` 用 29 个样本验证这四张表，**既验证该命中的命中，也验证不该误伤的没误伤**
+（浏览器、记事本、Blender、DSH 本身都必须干净通过）。
 
 判定目标是 **`WindowFromPoint`**——点击真正落在哪个窗口上，不是猜：
 
@@ -223,7 +277,7 @@ ONNXRuntime 和模型（约 70MB，之后走缓存）。
   "detail": { "process": "ApplicationFrameHost", "title": "计算器", "matched": "applicationframehost" } }
 ```
 
-审计记录：
+审计记录（含目标进程）：
 
 ```
 16:28:32  click            ApplicationFrameHost   ok=true
@@ -231,6 +285,23 @@ ONNXRuntime 和模型（约 70MB，之后走缓存）。
 ```
 
 只读工具不受策略影响（它们不改状态）。
+
+### 防护开关面板
+
+双击 **`guard-panel.cmd`** 打开，三个开关互相独立：
+
+![防护面板](docs/guard-panel.png)
+
+| 开关 | 关闭后 | 标记文件 |
+|---|---|---|
+| 弹窗审批 | 危险动作返回"待确认"，不弹窗 | `.approval-off` |
+| 黑名单拦截 | 黑名单与速率限制跳过 | `.guard-off` |
+| 审计日志 | 不写 `audit.jsonl` | `.audit-off` |
+
+服务端**每次调用都读标记文件**，所以点完立即生效，**不用重启 MCP**。
+（改 `policy.json` 里的名单仍需重启。）
+
+三者**完全独立**：关掉黑名单**不会**把弹窗也关掉。
 
 ### 语义定位 vs 坐标点击
 
@@ -260,8 +331,22 @@ click_element { window: "计算器", automation_id: "plusButton" }
 | 窗口移动后 | 静默点错 | 仍然正确 |
 | 找不到时 | 点空、无反馈 | 明确报错 |
 
-**但控件树不是万能的**：浏览器 canvas、游戏、自绘 UI 没有可用控件树
-（Chromium 的网页内容在 Edge 窗口里只暴露到 Pane 层）。
+**控件树实际能覆盖什么**——很容易想当然地认为"浏览器读不到"，于是过早退回像素。
+实测下来 **Edge/Chromium 是会暴露页面的**：在 4399.com 的游戏索引页上，一次
+`find_elements` 就返回了 22 个带精确矩形的超链接，包括页面下方一万多像素处的
+offscreen 元素，全部可以按名字点击、鼠标一动不动。
+
+**仍然读不到的**：
+
+| | 可读？ |
+|---|---|
+| 静态 HTML 链接/按钮/输入框 | ✅ |
+| 原生 Win32 / WPF / UIA 应用 | ✅ |
+| `canvas` / WebGL / 游戏画面 | ❌ |
+| 尚未挂载的虚拟列表 | ❌ |
+| 自绘工具栏（不少国产桌面软件） | ❌ |
+
+读不到时依次退回 `ocr`、再退回坐标。
 
 **三级降级策略**：
 
@@ -300,12 +385,17 @@ Codex 的 computer use 也不是连续视频流——它同样是"动作 → 截
 ## 测试
 
 ```bash
-cd D:\dsh-workspace\computer-use-mcp
-
-node test-client.js read       # 只读工具，无副作用（含鼠标移动往返）
-node test-client.js notepad    # 端到端：开记事本 → 激活 → 点击 → 输入 Unicode → 剪贴板回读比对
-node test-client.js advanced   # screen_hash / wait_for_change / batch
+npm test                      # 只读工具，无副作用
+npm run test:uia              # 控件树 + 语义搜索
+npm run test:policy           # 四张策略表，29 个样本，误伤即失败
+npm run bench                 # 延迟 + token 成本表
+node test-client.js policy    # 策略与审计端到端
+node test-client.js rapid     # 系统 OCR vs RapidOCR 同区域对比
+node test-client.js newtools  # launch_app / 审批闸门 / OCR 驱动点击
 ```
+
+`docs/make-*.ps1` 可以从**当前屏幕**重新生成 README 里的图，所以截图不是手绘的，
+随时可复现。
 
 `notepad` 阶段验证 Unicode 输入：
 
@@ -316,11 +406,13 @@ type_text  输入  DSH MCP test: it's ok | 中文测试 🎋
 
 ## 已知限制
 
-- **全屏截图约 100ms**，其中 55ms 是整屏读回的物理下限。
+- **仅 Windows**。
+- **全屏截图约 55ms 是物理下限**（整屏 GPU→CPU 读回）。上 DXGI Desktop Duplication 能再快，但要写 native addon。
 - **没有连续视觉流**：只在主动截图的那一刻看到画面（这是设计选择）。
+- **不是沙箱**：智能体以你的用户权限操作你的真实桌面，没有 VM。
 - **提权窗口碰不到**：UIPI 拦截向管理员窗口注入输入，UAC 安全桌面更进不去。
 - **`type_text` 依赖焦点**：输入前先 `activate_window` + `click` 定位。
-- **多显示器**：坐标是虚拟桌面空间，可能是负值。
+- **OCR 约 0.5–2.5 秒**，取决于常驻 worker 是否还活着。
 
 ## DSH 接线
 

@@ -117,6 +117,16 @@ The server falls back to Windows PowerShell 5.1 automatically.
 Optional: **OCR** needs [`uv`](https://docs.astral.sh/uv/) on PATH. Everything
 else works without it.
 
+### Verify it works
+
+```bash
+npm test              # read-only tools; no side effects, safe to run any time
+npm run test:policy   # the deny/approval lists, 29 samples
+```
+
+`npm test` prints a tick per tool plus its latency. If it lists tools and
+`screenshot` returns an image, the server is wired up correctly.
+
 ### Configure your MCP client
 
 <details open>
@@ -207,6 +217,25 @@ Coordinates fail silently when a window moves. So try in order:
    this same region.*
 
 3. **`screenshot` + coordinates** — last resort for canvas/self-drawn UI.
+
+**What the accessibility tree actually covers.** It is easy to assume browsers
+expose nothing and reach for pixels too early. In practice Edge/Chromium *does*
+publish the page: a single `find_elements` on a 4399.com game index returned 22
+hyperlinks with exact rects, including ones thousands of pixels offscreen — all
+clickable by name with no mouse movement.
+
+What it still cannot see:
+
+| | Accessible? |
+|---|---|
+| Static HTML links/buttons/inputs | yes |
+| Native Win32 / WPF / UIA apps | yes |
+| `canvas` / WebGL / game frames | no |
+| Virtualised lists not yet mounted | no |
+| Custom-drawn toolbars (many Chinese desktop apps) | no |
+
+When it is not, `ocr` and then plain coordinates are the fallbacks — in that
+order.
 
 Measured on the same task (click a button):
 
@@ -324,12 +353,17 @@ Design notes:
 ## Development
 
 ```bash
-npm test              # read-only tools, no side effects
-npm run test:uia      # accessibility tree + semantic search
-npm run bench         # latency + token table
-node test-client.js policy    # policy + audit behaviour
-node test-client.js rapid     # OCR engines compared
+npm test                      # read-only tools, no side effects
+npm run test:uia              # accessibility tree + semantic search
+npm run test:policy           # deny/approval lists, 29 samples, fails on false positives
+npm run bench                 # latency + token table
+node test-client.js policy    # policy + audit behaviour end to end
+node test-client.js rapid     # Windows OCR vs RapidOCR on the same region
+node test-client.js newtools  # launch_app, approval gate, OCR-driven click
 ```
+
+`docs/make-*.ps1` regenerate the README figures from a live screen, so the
+screenshots can be kept honest rather than hand-drawn.
 
 `host.ps1`, `ocr.ps1` and `approval.ps1` **must stay pure ASCII**: Windows
 PowerShell 5.1 reads `.ps1` as ANSI when there is no BOM, and a single non-ASCII
@@ -339,8 +373,19 @@ byte can swallow a newline and corrupt the embedded C#. Verify with:
 ((Get-Content .\host.ps1 -AsByteStream) | Where-Object { $_ -gt 127 }).Count   # must be 0
 ```
 
-`approval-toggle.ps1` is the exception: it prints Chinese to the user, so it is
-saved **with** a UTF-8 BOM, which both shells honour.
+`approval-toggle.ps1`, `guard-panel.ps1` and `approval.ps1` are the exception:
+they print Chinese to the user, so they are saved **with** a UTF-8 BOM, which
+both shells honour.
+
+## Contributing
+
+Issues and PRs welcome. Two rules keep this repo reviewable:
+
+1. **No third-party automation code.** The whole point is that every line that
+   touches your machine can be read in one sitting. `host.ps1` is C# + Win32 and
+   nothing else.
+2. **Measure, don't claim.** If you change something for speed, put a number in
+   the PR — `npm run bench` exists for that.
 
 ## License
 
