@@ -43,8 +43,23 @@ Exit codes: `0` allow once · `1` deny · `2` timeout · `3` dialog unavailable
 Flip it off any time when you don't want to be interrupted:
 
 ```
-double-click  toggle-approval.cmd
+double-click  guard-panel.cmd      # the panel: three independent switches
+double-click  toggle-approval.cmd  # quick toggle for the dialog only
 ```
+
+The panel writes a marker file per switch, and the server reads them **on every
+call** — changes apply instantly, no restart:
+
+| Switch | Marker file | Off means |
+|---|---|---|
+| Approval dialog | `.approval-off` | risky actions return `pending_safety_check` instead of asking you |
+| Deny lists | `.guard-off` | the deny lists and rate limit are skipped |
+| Audit log | `.audit-off` | nothing is written to `audit.jsonl` |
+
+They are independent: turning off the deny lists does **not** silently turn off
+the dialog.
+
+![Guard panel](docs/guard-panel.png)
 
 ---
 

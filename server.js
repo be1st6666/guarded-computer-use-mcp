@@ -878,6 +878,7 @@ async function resolveTarget(name, args) {
 
 function policyGuard(name, args, target) {
   if (!MUTATING.has(name)) return null;
+  if (!guardEnabled()) return null;          // 总开关关闭：黑名单与速率限制都跳过
 
   if (target && target.found !== false) {
     const proc = target.process ?? '';
@@ -908,7 +909,7 @@ function policyGuard(name, args, target) {
 }
 
 async function audit(name, args, result, target) {
-  if (!policy.audit) return;
+  if (!auditEnabled()) return;
   try {
     const line = JSON.stringify({
       t: new Date().toISOString(),
@@ -931,10 +932,22 @@ async function audit(name, args, result, target) {
 
 const APPROVAL_SCRIPT = path.join(HERE, 'approval.ps1');
 const APPROVAL_FLAG = path.join(HERE, '.approval-off');
+const GUARD_FLAG = path.join(HERE, '.guard-off');        // 总开关：关闭全部防护
+const AUDIT_FLAG = path.join(HERE, '.audit-off');
+
+/** 总开关：关闭后黑名单与速率限制停用（弹窗、审计各自独立） */
+function guardEnabled() {
+  return !existsSync(GUARD_FLAG);
+}
 
 function approvalEnabled() {
   if (existsSync(APPROVAL_FLAG)) return false;
   return policy.approval?.enabled !== false;
+}
+
+function auditEnabled() {
+  if (existsSync(AUDIT_FLAG)) return false;
+  return policy.audit !== false;
 }
 
 function describeTarget(t) {
