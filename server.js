@@ -191,7 +191,9 @@ function tool(name, config, fn) {
 
       const check = safetyCheck(name, args);
       if (check) {
-        if (approvalEnabled()) {
+        if (sessionApprovals.has(approvalKey(name, target))) {
+          // 用户在本会话里勾选了"记住这个目标"，直接放行
+        } else if (approvalEnabled()) {
           const code = await requestApproval(name, args, check, target);
           if (code !== 0) {
             const res = approvalDenied(name, args, check, code);
@@ -922,6 +924,24 @@ function describeTarget(t) {
   return title ? `${proc}  |  ${title}` : proc;
 }
 
+/** 把工具参数压成一行，让人看清楚到底要做什么 */
+function describeArgs(args) {
+  if (!args) return '(none)';
+  const parts = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (k === 'confirm') continue;              // 内部参数，不展示
+    let s = typeof v === 'string' ? v : JSON.stringify(v);
+    if (s && s.length > 96) s = s.slice(0, 93) + '...';
+    parts.push(`${k}=${s}`);
+  }
+  return parts.length ? parts.join(',  ') : '(none)';
+}
+
+/** 会话级"记住"：同一次运行内不再重复询问同一个 工具+目标 组合 */
+const sessionApprovals = new Set();
+const approvalKey = (name, target) =>
+  `${name}|${target?.process ?? ''}|${target?.title ?? ''}`;
+
 function spawnApproval(shell, params, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
@@ -949,14 +969,19 @@ async function requestApproval(name, args, check, target) {
   const params = [
     '-Action', String(name),
     '-Target', describeTarget(target),
+    '-Detail', describeArgs(args),
     '-Reason', String(check.reason ?? ''),
     '-TimeoutMs', String(timeoutMs),
   ];
   for (const shell of SHELL_CANDIDATES) {
     const code = await spawnApproval(shell, params, timeoutMs);
-    if (code !== 3) return code;         // 0 allow / 1 deny / 2 timeout
+    if (code === 4) {                       // 允许 + 本次会话记住
+      sessionApprovals.add(approvalKey(name, target));
+      return 0;
+    }
+    if (code !== 3) return code;            // 0 allow / 1 deny / 2 timeout
   }
-  return 3;                              // 三个 shell 都起不来
+  return 3;                                 // 三个 shell 都起不来
 }
 
 function approvalDenied(name, args, check, code) {

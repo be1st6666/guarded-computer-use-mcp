@@ -37,13 +37,14 @@ Start-Process -FilePath 'C:\Users\18858\PowerShell7\PowerShell\7\pwsh.exe' -Argu
   '-NoProfile', '-File', "`"$d\approval.ps1`"",
   '-Action', 'click_element',
   '-Target', '"chrome  |  Online Banking - Transfer"',
+  '-Detail', '"automation_id=submitButton,  name=确认转账"',
   '-Reason', '"target window title looks sensitive"',
   '-TimeoutMs', '20000'
 
 $h = [IntPtr]::Zero
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 250
-    $h = [WinCap]::Find('approval required')
+    $h = [WinCap]::Find('computer-use')
     if ($h -ne [IntPtr]::Zero) { break }
 }
 if ($h -eq [IntPtr]::Zero) { Write-Output 'DIALOG_NOT_FOUND'; exit 1 }

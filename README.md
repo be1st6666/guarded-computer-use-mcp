@@ -21,7 +21,24 @@ This one puts a gate in front of the dangerous part:
 ![Approval dialog](docs/approval-dialog.png)
 
 The MCP server **blocks** on that dialog and uses its exit code. Only a real
-human click can proceed — the model cannot forge one.
+human action can proceed — the model cannot forge one.
+
+**Built so a stray keystroke cannot approve anything:**
+
+| Key | Effect |
+|---|---|
+| `Enter` | **nothing** — deliberately unbound |
+| `Esc` / window close | deny |
+| `Alt+A` / click Allow | allow |
+| no answer in time | auto-deny (countdown shown) |
+
+The dialog also shows the **actual arguments** being executed
+(`automationId=…`, `name=…`), follows your OS language (Chinese/English), beeps,
+and stays on top. Tick *remember this target for this session* to stop being
+asked about the same tool + target until the server restarts.
+
+Exit codes: `0` allow once · `1` deny · `2` timeout · `3` dialog unavailable
+(falls back to `pending_safety_check`) · `4` allow + remember for this session.
 
 Flip it off any time when you don't want to be interrupted:
 
