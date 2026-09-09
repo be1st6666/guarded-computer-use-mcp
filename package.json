@@ -1,0 +1,60 @@
+{
+  "name": "guarded-computer-use-mcp",
+  "version": "0.1.0",
+  "description": "Windows computer-use MCP server with a human-in-the-loop approval gate. Screenshot, mouse, keyboard, UI Automation and OCR — and every risky action waits for a real human click.",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "guarded-computer-use-mcp": "server.js"
+  },
+  "files": [
+    "server.js",
+    "host.ps1",
+    "ocr.ps1",
+    "ocr_rapid.py",
+    "approval.ps1",
+    "approval-toggle.ps1",
+    "toggle-approval.cmd",
+    "policy.json",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-client.js read",
+    "test:uia": "node test-client.js uia",
+    "bench": "node bench.js 5"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "computer-use",
+    "windows",
+    "desktop-automation",
+    "ui-automation",
+    "uiautomation",
+    "ocr",
+    "ai-agent",
+    "human-in-the-loop",
+    "safety"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/be1st6666/guarded-computer-use-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/be1st6666/guarded-computer-use-mcp/issues"
+  },
+  "homepage": "https://github.com/be1st6666/guarded-computer-use-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  }
+}

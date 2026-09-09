@@ -1,0 +1,22 @@
+# Normalize line endings: text files as LF in the repo, native on checkout.
+* text=auto
+
+# Windows scripts and shell scripts keep CRLF on checkout
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# Never touch binaries
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.ico   binary
+
+# Keep the C#-bearing host script byte-exact: a stray BOM or CRLF change here
+# can break Add-Type under Windows PowerShell 5.1.
+host.ps1 -text
+ocr.ps1  -text
+approval.ps1 -text
+
+# Linguist: generated figures live in docs/, do not count them as code
+docs/*.png linguist-documentation

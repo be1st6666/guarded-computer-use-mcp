@@ -1,0 +1,29 @@
+{
+  "_comment": "computer-use-mcp 策略。改完无需重启，下次工具调用时生效（服务端启动时读取；要热改请重启 MCP 或调用 reload_policy）。",
+  "_comment2": "deny_processes / deny_window_titles 里的字符串是**子串**匹配，大小写不敏感。",
+
+  "deny_processes": [
+    "keepass", "keepassxc", "1password", "bitwarden", "lastpass", "dashlane",
+    "nordpass", "keeper", "enpass", "authenticator", "windowssecurity"
+  ],
+
+  "deny_window_titles": [
+    "密码", "password", "凭据", "credential",
+    "银行", "bank", "支付", "pay", "钱包", "wallet",
+    "转账", "transfer", "两步验证", "2fa", "otp"
+  ],
+
+  "_comment3": "allow_processes 非空时，只允许操作这些进程（白名单模式）。留空表示不限制。",
+  "allow_processes": [],
+
+  "max_actions_per_minute": 120,
+
+  "_comment4": "audit: 每个动作连同目标窗口写进 audit.jsonl。",
+  "audit": true,
+
+  "_comment5": "approval: 危险动作弹真实对话框等人手点击。enabled=false 等同于放置 .approval-off 文件。",
+  "approval": {
+    "enabled": true,
+    "timeout_ms": 30000
+  }
+}

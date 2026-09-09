@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# runtime state — never commit these
+audit.jsonl
+.approval-off
+policy.local.json
+
+# test / debug scratch files
+.*.txt
+.*.png
+.*.log
+.click-allow.ps1
+.spawn-approval.cjs
+.memprobe.mjs
+
+# editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
