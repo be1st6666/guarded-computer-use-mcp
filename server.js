@@ -170,8 +170,10 @@ class PsHost {
 const host = new PsHost();
 
 /* ------------------------------------------------------------------ MCP */
+// 版本从 package.json 读，避免两处不一致
+const PKG = JSON.parse(readFileSync(path.join(HERE, 'package.json'), 'utf8'));
 const server = new McpServer(
-  { name: 'computer-use', version: '1.0.0' },
+  { name: PKG.name, version: PKG.version },
   { capabilities: { tools: {} } }
 );
 
