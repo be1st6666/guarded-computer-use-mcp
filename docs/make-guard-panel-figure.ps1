@@ -29,10 +29,10 @@ public class WinCap2 {
 '@
 [void][WinCap2]::SetProcessDPIAware()
 
-$d = 'D:\dsh-workspace\computer-use-mcp'
+$d = Split-Path -Parent $PSScriptRoot
 $out = "$d\docs"
 
-Start-Process -FilePath 'C:\Users\18858\PowerShell7\PowerShell\7\pwsh.exe' -ArgumentList `
+Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList `
   '-NoProfile', '-File', "`"$d\guard-panel.ps1`""
 
 $h = [IntPtr]::Zero

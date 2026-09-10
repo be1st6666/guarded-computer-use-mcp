@@ -4,7 +4,9 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class Dp2{[DllImport("user32.dll")]public static extern bool SetProcessDPIAware();}'
 [void][Dp2]::SetProcessDPIAware()
 
-$RX = 60; $RY = 520; $RW = 500; $RH = 320
+# 裁剪区域必须**完全落在计算器窗口内**（窗口 rect 约 59,48 - 561,858）。
+# 早先裁 60..560 时边缘带进了约 15px 桌面壁纸和图标，所以向内收了 10px。
+$RX = 70; $RY = 520; $RW = 480; $RH = 320
 $scale = 2   # 放大 2 倍输出，GitHub 上更清晰
 
 # OCR 结果（来自 RapidOCR，屏幕坐标）
@@ -23,7 +25,7 @@ $boxes = @(
     @{ t = '0';   x = 243; y = 792; w = 18; h = 24; s = 0.968 }
 )
 
-$out = 'D:\dsh-workspace\computer-use-mcp\docs'
+$out = $PSScriptRoot
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 $bmp = New-Object System.Drawing.Bitmap $RW, $RH, ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)

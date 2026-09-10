@@ -124,9 +124,10 @@ server.js ──── 一行 base64(UTF-8 JSON) 请求 ────▶ host.ps1
 宿主优先使用 **PowerShell 7**，找不到再回退 Windows PowerShell 5.1：
 
 ```
-pwsh.exe  →  C:\Users\18858\PowerShell7\PowerShell\7\pwsh.exe  →  powershell.exe
+pwsh.exe（PATH）→ %ProgramFiles%\PowerShell\7\pwsh.exe → powershell.exe
 ```
 
+所有路径都是**运行时探测**的，没有写死任何一台机器的位置。
 可用 `COMPUTER_USE_SHELL` 环境变量强制指定。实测两版在截图性能上**没有实质差异**
 （capture 60ms vs 66ms，run-to-run 波动更大），选 7 是语言层面的收益。
 
@@ -481,7 +482,7 @@ OCR 本身在本地运行、不联网，但它的结果会返回给模型，所�
 
 ## DSH 接线
 
-`C:\Users\18858\.dsh\profiles\web\cordis.patch.yml`：
+`$DSH_HOME/profiles/<profile>/cordis.patch.yml`：
 
 ```yaml
 - insert:
@@ -492,8 +493,8 @@ OCR 本身在本地运行、不联网，但它的结果会返回给模型，所�
         transport: stdio
         command: C:/Program Files/nodejs/node.exe
         args:
-          - D:/dsh-workspace/computer-use-mcp/server.js
-        cwd: D:/dsh-workspace/computer-use-mcp/
+          - D:/path/to/guarded-computer-use-mcp/server.js
+        cwd: D:/path/to/guarded-computer-use-mcp
 ```
 
 工具在 DSH 侧的名字是 `mcp__computer__<tool>`。配置热重载，改完约 10 秒内重连。

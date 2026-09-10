@@ -28,12 +28,12 @@ public class WinCap {
 '@
 [void][WinCap]::SetProcessDPIAware()
 
-$d = 'D:\dsh-workspace\computer-use-mcp'
+$d = Split-Path -Parent $PSScriptRoot
 $out = "$d\docs"
 
 # 起一个演示用的对话框（20 秒后自动关闭）
 # 注意：不能加 -WindowStyle Hidden —— 它会让对话框本身也不可见
-Start-Process -FilePath 'C:\Users\18858\PowerShell7\PowerShell\7\pwsh.exe' -ArgumentList `
+Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList `
   '-NoProfile', '-File', "`"$d\approval.ps1`"",
   '-Action', 'click_element',
   '-Target', '"chrome  |  Online Banking - Transfer"',
