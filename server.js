@@ -715,7 +715,8 @@ tool('ocr', {
     'every word. Use this when the UI exposes no accessibility tree (canvas, games, web content) or when ' +
     'small text must be read exactly. Boxes are screen coordinates, so a recognised word can be clicked ' +
     'directly. Engine "rapidocr" (default) is PaddleOCR models on ONNXRuntime — much better on Chinese and ' +
-    'large glyphs than the built-in "windows" engine.',
+    'large glyphs than the built-in "windows" engine. Latency scales with the number of recognised text ' +
+    'boxes, so pass a region instead of the whole screen whenever you do not need all of it.',
   inputSchema: {
     x: z.number().int().optional().describe('Region left edge; omit for the whole screen'),
     y: z.number().int().optional(),

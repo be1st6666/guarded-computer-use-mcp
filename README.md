@@ -198,6 +198,15 @@ Measured on a 2560×1600 display, median of 5–8 runs:
 
 The ~55 ms capture floor is the GPU→CPU readback of a full frame over GDI.
 
+OCR latency scales with the **number of recognised text boxes**, not with the
+capture rectangle: a text-heavy full 2560×1600 screen measured **~6.9 s / 105
+boxes**, while a 1280×800 region measured **~3.3 s / 45 boxes** (~2×). Downscaling
+the image first does **not** help — RapidOCR's detector normalises its input to a
+fixed size internally, so pre-scaling costs accuracy for almost no time — and a
+larger recognition batch is slower, not faster. So **pass a region**
+(`x`/`y`/`width`/`height`) instead of OCRing the whole screen whenever you do not
+need all of it.
+
 ### Token economics
 
 A screenshot costs ~2133 tokens. The alternatives cost far less:

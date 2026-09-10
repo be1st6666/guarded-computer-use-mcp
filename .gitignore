@@ -23,3 +23,6 @@ policy.local.json
 *.swp
 Thumbs.db
 desktop.ini
+
+__pycache__/
+*.pyc

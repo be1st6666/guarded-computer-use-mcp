@@ -49,6 +49,11 @@ First public release.
   full screenshot.
 - RapidOCR runs as a warm worker that idle-exits, so repeat OCR costs ~350 ms
   instead of ~2.3 s while holding ~96 MB only while in use.
+- OCR latency scales with the number of recognised text boxes, not the capture
+  rectangle: a text-heavy full 2560x1600 screen measured ~6.9 s / 105 boxes,
+  versus ~3.3 s / 45 boxes for a 1280x800 region. Pre-downscaling does not help
+  (the detector normalises its input internally) and a larger recognition batch
+  is slower, so pass a region instead of OCRing the whole screen.
 
 ### Known limitations
 
