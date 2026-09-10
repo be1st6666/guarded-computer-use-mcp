@@ -10,6 +10,19 @@ windows, clipboard.
 
 ---
 
+> [!WARNING]
+> **This server moves your real mouse and keyboard, with your user's privileges,
+> on your real desktop. There is no sandbox and no undo.**
+>
+> It can send messages as you, delete files, and read everything on your screen —
+> and what it reads is transmitted to your model provider.
+>
+> The approval gate and the policy lists reduce the blast radius. They do not
+> eliminate it. Read **[Risks and disclaimer](#risks-and-disclaimer)** before you
+> point an agent at this.
+
+---
+
 ## Why
 
 Most computer-use tools hand the model a keyboard and hope for the best. That is
@@ -337,6 +350,65 @@ Design notes:
   drives a desktop *inside* a VM, not yours.
 - Elevated windows: UIPI blocks input injection into admin windows, and the UAC
   secure desktop is unreachable. This is a Windows boundary, not a feature.
+
+---
+
+## Risks and disclaimer
+
+### What can go wrong
+
+This is not a toy permission. An agent driving this server can:
+
+- send a message, email or payment **as you**
+- delete or overwrite files it was never asked to touch
+- read whatever is on your screen, including other people's private data
+- change application or system settings
+
+There is **no undo**. Ctrl+Z does not cover "sent", "paid" or "deleted".
+
+### Prompt injection
+
+The agent reads your screen and the documents on it. Anything it reads can carry
+instructions: a web page, a PDF, an email, a chat message, a code comment. A
+hostile page can tell the agent to do something you never asked for.
+
+The approval gate catches actions matching the safety patterns and the approval
+lists. It does **not** catch a plausible-looking click in an app that is on
+neither list. Treat everything the agent reads as untrusted input.
+
+### Your screen leaves your machine
+
+Screenshots, OCR output, clipboard contents and window titles are sent to
+whichever model provider your MCP client uses. That is the whole point — the
+model has to see the screen — but it means:
+
+- everything visible while the agent runs is transmitted off-device
+- that includes other people's messages, documents and personal data
+- check your provider's data-retention policy before pointing this at anything
+  sensitive
+- prefer `zoom` on a small region over a full screenshot when you can
+
+OCR runs locally and sends nothing itself, but its output is returned to the
+model, so it is transmitted too.
+
+### What the guard does not do
+
+- It is **not a sandbox**. The agent runs as you, on your desktop, with your
+  sessions and tokens.
+- It does not stop a wrong action in an app that is on neither list.
+- It does not survive anyone who can also edit `policy.json` or create the
+  `.guard-off` marker — those are plain files in this directory.
+- The deny lists are substring matches: a speed bump, not a boundary.
+
+### You are responsible
+
+You choose what to point this at, which lists to keep enabled, and whether to
+leave the approval gate on. Run it with the gate on until you have watched it
+work on your own machine. Do not expose the stdio transport to a network.
+
+Provided under the MIT licence, **without warranty of any kind** — see
+[LICENSE](LICENSE). The authors are not liable for any loss or damage arising
+from its use.
 
 ---
 

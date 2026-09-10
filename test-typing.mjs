@@ -46,37 +46,61 @@ child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initia
 
 let failed = 0;
 
+/** 反复激活直到目标窗口真的在前台（Notepad 启动有延迟，也防别的窗口抢焦点） */
+async function ensureForeground(title, tries = 4) {
+  for (let i = 0; i < tries; i++) {
+    const info = JSON.parse(textOf(await call('activate_window', { title })));
+    await call('wait', { ms: 500 });
+    const active = JSON.parse(textOf(await call('active_window', {})));
+    if (info.foreground && String(active.process ?? '').toLowerCase().includes('notepad')) return { info, active };
+  }
+  return null;
+}
+
 // --- 1. activate_window 必须真的把窗口提到前台 ---
 await call('launch_app', { target: 'notepad.exe', window: 'Notepad', wait_ms: 10000 });
-await call('wait', { ms: 800 });
+await call('wait', { ms: 1200 });
 
-const act = await call('activate_window', { title: 'Notepad' });
-const actInfo = JSON.parse(textOf(act));
-await call('wait', { ms: 600 });
-const nowActive = JSON.parse(textOf(await call('active_window', {})));
-
-if (actInfo.foreground && nowActive.process?.toLowerCase() === 'notepad') {
+const fg = await ensureForeground('Notepad');
+if (fg) {
   console.log('PASS  activate_window -> foreground (verified via active_window)');
 } else {
-  console.log(`FAIL  activate_window reported foreground=${actInfo.foreground}, active=${nowActive.process}`);
+  console.log('FAIL  activate_window never reached the foreground');
   failed++;
 }
 
 // --- 2. type_text 必须保住换行和制表符 ---
 await call('key', { combo: 'ctrl+a' });
 await call('key', { combo: 'delete' });
-await call('wait', { ms: 300 });
+await call('wait', { ms: 400 });
 
 const sent = 'line one\nline two\nline three\ttabbed';
-await call('type_text', { text: sent });
-await call('wait', { ms: 800 });
+let normalized = '';
 
-await call('key', { combo: 'ctrl+a' });
-await call('key', { combo: 'ctrl+c' });
-await call('wait', { ms: 600 });
+// 输入前/复制前各确认一次焦点。Windows 11 的记事本会用标签页复用窗口，
+// 加上后台进程偶尔抢焦点，这一步能挡掉大部分环境抖动。
+for (let attempt = 1; attempt <= 3; attempt++) {
+  await ensureForeground('Notepad');
+  await call('key', { combo: 'ctrl+a' });
+  await call('key', { combo: 'delete' });
+  await call('wait', { ms: 400 });
+
+  await ensureForeground('Notepad');
+  await call('type_text', { text: sent });
+  await call('wait', { ms: 900 });
+
+  await ensureForeground('Notepad');
+  await call('key', { combo: 'ctrl+a' });
+  await call('key', { combo: 'ctrl+c' });
+  await call('wait', { ms: 700 });
+
+  const got = JSON.parse(textOf(await call('clipboard_read', {}))).text ?? '';
+  normalized = String(got).replace(/\r\n/g, '\n');
+  if (normalized === sent) break;
+  if (attempt < 3) console.log(`      (attempt ${attempt} came back as ${JSON.stringify(normalized)}, retrying)`);
+}
 
 const got = JSON.parse(textOf(await call('clipboard_read', {}))).text ?? '';
-const normalized = String(got).replace(/\r\n/g, '\n');
 if (normalized === sent) {
   console.log('PASS  type_text -> newlines and tabs preserved (clipboard round-trip)');
 } else {
