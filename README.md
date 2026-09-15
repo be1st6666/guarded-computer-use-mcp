@@ -3,8 +3,9 @@
 **Give your agent hands — without giving away the keys.**
 
 A Windows computer-use MCP server where every risky action **stops and waits for a
-real human click**. 26 tools: screenshot, mouse, keyboard, UI Automation, OCR,
-windows, clipboard.
+real human** — a physical keystroke or click, which injected input, posted window
+messages and UIAutomation invocations cannot fake. 26 tools: screenshot, mouse,
+keyboard, UI Automation, OCR, windows, clipboard.
 
 [中文文档](README.zh-CN.md)
 
