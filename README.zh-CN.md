@@ -1,12 +1,39 @@
 # guarded-computer-use-mcp
 
+[![CI](https://github.com/be1st6666/guarded-computer-use-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/be1st6666/guarded-computer-use-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/be1st6666/guarded-computer-use-mcp?sort=semver)](https://github.com/be1st6666/guarded-computer-use-mcp/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-339933.svg)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6.svg)](#安装)
+[![Tests](https://img.shields.io/badge/tests-unit%20%2B%20smoke%20%2B%20desktop%20E2E-brightgreen.svg)](test/)
+
 [English](README.md) · 中文
 
 **给智能体一双手，但不交出钥匙。**
 
-Windows 桌面控制 MCP 服务：**危险动作会停下来等真人点击**。26 个工具：截图、鼠标、键盘、UI Automation、OCR、窗口、剪贴板。
+Windows 桌面控制 MCP 服务：**危险动作会停下来等真人点击**——而且是只认**物理**按键或点击的弹窗，注入的输入、post 过去的窗口消息、UIAutomation 调用都伪造不了。26 个工具：截图、鼠标、键盘、UI Automation、OCR、窗口、剪贴板。
 
 **没有任何第三方自动化代码**——所有能力由本目录的 `host.ps1`（C# + Win32）实现，唯一依赖是官方的 `@modelcontextprotocol/sdk`。
+
+---
+
+### 快速开始（TL;DR）
+
+Windows 10/11 · Node ≥ 18 · 运行时只依赖官方 MCP SDK 一个包。
+
+```bash
+git clone https://github.com/be1st6666/guarded-computer-use-mcp
+cd guarded-computer-use-mcp && npm install
+npm run verify        # lint、73 个单测、策略样本、smoke、审计链
+```
+
+```json
+{ "mcpServers": { "computer": {
+  "command": "node",
+  "args": ["D:/path/to/guarded-computer-use-mcp/server.js"] } } }
+```
+
+点「发送」、关窗口、按 `alt+f4` 会弹出只有**物理**键鼠才能回答的确认框；密码管理器、银行页面、shell 一律硬拒绝，每个动作都写进带哈希链的 `audit.jsonl`。它**不是沙箱**——用在重要的东西上之前先读 [SECURITY.md](SECURITY.md)，完整步骤见[安装](#安装)。
 
 ---
 

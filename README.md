@@ -1,5 +1,12 @@
 # guarded-computer-use-mcp
 
+[![CI](https://github.com/be1st6666/guarded-computer-use-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/be1st6666/guarded-computer-use-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/be1st6666/guarded-computer-use-mcp?sort=semver)](https://github.com/be1st6666/guarded-computer-use-mcp/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-339933.svg)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6.svg)](#install)
+[![Tests](https://img.shields.io/badge/tests-unit%20%2B%20smoke%20%2B%20desktop%20E2E-brightgreen.svg)](test/)
+
 **Give your agent hands — without giving away the keys.**
 
 A Windows computer-use MCP server where every risky action **stops and waits for a
@@ -8,6 +15,30 @@ messages and UIAutomation invocations cannot fake. 26 tools: screenshot, mouse,
 keyboard, UI Automation, OCR, windows, clipboard.
 
 [中文文档](README.zh-CN.md)
+
+---
+
+### TL;DR
+
+Windows 10/11 · Node ≥ 18 · one runtime dependency (the official MCP SDK).
+
+```bash
+git clone https://github.com/be1st6666/guarded-computer-use-mcp
+cd guarded-computer-use-mcp && npm install
+npm run verify        # lint, 73 unit tests, policy samples, smoke test, audit chain
+```
+
+```json
+{ "mcpServers": { "computer": {
+  "command": "node",
+  "args": ["D:/path/to/guarded-computer-use-mcp/server.js"] } } }
+```
+
+Clicking *Send*, closing a window or pressing `alt+f4` pops a dialog that only a
+**physical** key or click can answer; password managers, banking pages and shells
+are refused outright, and every action lands in a hash-chained `audit.jsonl`.
+It is still **not a sandbox** — read [SECURITY.md](SECURITY.md) before pointing it
+at anything that matters, and [Install](#install) for the full setup.
 
 ---
 
