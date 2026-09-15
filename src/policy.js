@@ -376,6 +376,7 @@ export function needsApproval(name, args, target) {
  */
 export function pendingCheck(name, args, check, why = 'disabled') {
   const listTarget = check?.source === 'list';
+  const unknownTarget = check?.source === 'unknown';
   return {
     content: [
       {
@@ -388,10 +389,14 @@ export function pendingCheck(name, args, check, why = 'disabled') {
             arguments: args,
             reason: check.reason,
             matched: check.pattern,
-            how_to_proceed: listTarget
-              ? 'Not proceeding: this target is on the always-ask list, so confirm:true does not ' +
-                'override it. Turn the approval gate back on (guard-panel.cmd) or do it yourself.'
-              : 'Re-issue the same call with confirm: true after the user agrees.',
+            how_to_proceed: unknownTarget
+              ? 'The window this action would land on could not be resolved, so the deny lists could ' +
+                'not be applied. Re-issue with confirm: true only if you know what is under the ' +
+                'cursor / what currently has focus.'
+              : listTarget
+                ? 'Not proceeding: this target is on the always-ask list, so confirm:true does not ' +
+                  'override it. Turn the approval gate back on (guard-panel.cmd) or do it yourself.'
+                : 'Re-issue the same call with confirm: true after the user agrees.',
           },
           null,
           2,

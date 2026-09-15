@@ -138,6 +138,24 @@ function tool(name, config, fn) {
         return withNotices(mid);
       }
 
+      // 3. 目标未知就 fail closed：两个名单都依赖"这个动作会落在哪个窗口上"，
+      //    解析不出来时不能当作"没匹配"直接放行（那等于给了一条绕过名单的路）。
+      //    默认转成待确认，只有调用方显式 confirm 才继续。
+      if (MUTATING.has(name) && args?.confirm !== true && (!target || target.found === false)) {
+        const pending = pendingCheck(
+          name,
+          args,
+          {
+            reason: 'the target window could not be resolved, so the deny lists cannot be applied',
+            pattern: 'target-unknown',
+            source: 'unknown',
+          },
+          'unavailable',
+        );
+        writeAudit(name, args, pending, target);
+        return withNotices(pending);
+      }
+
       const blocked = policyGuard(name, args, target);
       if (blocked) {
         writeAudit(name, args, blocked, target);
@@ -349,6 +367,23 @@ tool(
       }
 
       const stepTarget = await resolveTarget(step.op, stepArgs);
+
+      // 同一个 fail closed 规则：解析不出目标就不在批里执行这一步
+      if (MUTATING.has(step.op) && stepArgs?.confirm !== true && (!stepTarget || stepTarget.found === false)) {
+        const pending = pendingCheck(
+          step.op,
+          stepArgs,
+          {
+            reason: 'the target window could not be resolved, so the deny lists cannot be applied',
+            pattern: 'target-unknown',
+            source: 'unknown',
+          },
+          'unavailable',
+        );
+        writeAudit(step.op, stepArgs, pending, stepTarget);
+        content.push({ type: 'text', text: `${label}: BLOCKED — target window could not be resolved (fail closed)` });
+        continue;
+      }
 
       // 黑名单对 batch 的每一步同样生效（此前 batch 完全绕过了 deny list）
       const blocked = policyGuard(step.op, stepArgs, stepTarget);
