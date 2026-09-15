@@ -44,7 +44,7 @@
     "bench": "node bench.js 5",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "test:unit": "node --test test/guard.test.mjs test/audit.test.mjs test/policy.test.mjs test/approval-lock.test.mjs",
+    "test:unit": "node --test test/guard.test.mjs test/audit.test.mjs test/audit-tamper.test.mjs test/policy.test.mjs test/hardening.test.mjs test/approval-lock.test.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:inject": "node e2e/approval-inject.mjs",
     "test:lock": "node e2e/gate-lock-e2e.mjs",

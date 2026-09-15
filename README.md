@@ -33,21 +33,30 @@ This one puts a gate in front of the dangerous part:
 
 ![Approval dialog](docs/approval-dialog.png)
 
-The MCP server **blocks** on that dialog and uses its exit code. Two independent
-things stop the model from answering its own prompt:
+The MCP server **blocks** on that dialog and uses its exit code. Three
+independent things stop the model from answering its own prompt:
 
 1. **The gate lock** — while a dialog is open, every input-injecting tool is
-   refused (`refused_by_approval_gate`). MCP handlers are async, so without this
-   a *parallel* tool call (`key("alt+a")`, `click(x, y)` on Allow) would answer
-   the dialog. That was a real bypass; it is fixed and covered by
-   `npm run test:inject`.
-2. **The physical-input filter** — the dialog installs low-level keyboard and
-   mouse hooks and discards every event carrying the Windows `injected` flag, so
-   `SendInput` from *any* automation tool cannot press Alt+A or click Allow. It
-   shows how many injections it ignored, and says so if it could not install.
+   refused (`refused_by_approval_gate`), and the check runs again after every
+   `await` (including inside `batch`, whose step loop could otherwise resume
+   after a parallel call opened a dialog). MCP handlers are async, so without
+   this a *parallel* tool call (`key("alt+a")`, `click(x, y)` on Allow) would
+   answer the dialog. That was a real bypass; it is fixed and covered by
+   `npm run test:inject` and `npm run test:lock`.
+2. **Only one dialog at a time** — a second approval-requiring call is refused
+   rather than stacking a dialog, so the lock cannot lift while another prompt is
+   still unanswered.
+3. **The dialog wants a physical event** — it installs low-level keyboard and
+   mouse hooks, discards every event carrying the Windows `injected` flag, and
+   only accepts an allow from those hooks (a real Alt+A, or a real click inside
+   *Allow*). `SendInput` from any automation tool, a posted `BM_CLICK` /
+   `WM_KEYDOWN`, and a UIAutomation `InvokePattern` all fail this test, and the
+   dialog says how many injected events it threw away.
 
-What that still does not cover is UIAutomation `InvokePattern` from a *second*
-desktop-control server — see [SECURITY.md](SECURITY.md) §4.1.
+```json
+{ "refused_by_approval_gate": true,
+  "reason": "an approval dialog is waiting for a human decision — input-injecting tools are refused until it is answered" }
+```
 
 **Built so a stray keystroke cannot approve anything:**
 
@@ -101,15 +110,16 @@ files in this directory can still read `guard.key`; see
 
 | Layer | What it does | Can the model bypass it? |
 |---|---|---|
-| **Policy engine** (`policy.json`) | Refuses to touch deny-listed processes / window titles. Optional allow-list. Rate limit. Applies to every `batch` step too. | Not via `confirm` — hard refusal. Editing `policy.json` widens it |
-| **Approval gate** (`approval.ps1`) | Risky action → real dialog → waits for a human | Not by answering it itself: input tools are locked out while it is open, and injected input is discarded |
-| **Gate lock** (`src/approval.js`) | Refuses input-injecting tools while a dialog is open | No — it is server-side state |
-| **Physical-input filter** | Ignores `SendInput` keystrokes/clicks in the dialog | Not by injection; a *second* UIA-capable server can still invoke Allow |
-| **Signed switches** (`src/guard.js`) | Forged/hand-edited markers are ignored and reported | Cannot be forged without the key; `guard.key` is readable by your user |
-| **Audit log** (`audit.jsonl`) | Every action + its target process, redacted, hash-chained | — (detects edits after the fact: `npm run audit:verify`) |
+| **Policy engine** (`policy.json`) | Refuses to touch deny-listed processes / window titles, and refuses shells/LOLBins as `launch_app` targets. Optional allow-list. Rate limit. Applies to every `batch` step too. | The deny lists ignore `confirm` entirely. Editing `policy.json` widens them |
+| **Approval gate** (`approval.ps1`) | Risky action → real dialog → waits for a human decision | Only a **physical** Alt+A / click counts. Not by `confirm`, not by injected input, not by posted messages (`BM_CLICK`), not by UIA `InvokePattern`, and not while another dialog is open |
+| **Gate lock** (`src/approval.js`) | Refuses input-injecting tools while a dialog is open, re-checked after every await (including inside `batch`) | No — it is server-side state |
+| **Signed switches** (`src/guard.js`) | Forged, hand-edited **or replayed** markers are ignored and reported | Cannot be forged or replayed without the key; `guard.key` is readable by your user, and the accepted-marker watermark can be rolled back by whoever can write it |
+| **Audit log** (`audit.jsonl`) | Every action + its target process, redacted, hash-chained, with a chain head recording how far the segment got | Detects edits, deletions, truncation and hash-stripping (`npm run audit:verify`); a determined writer can still rewrite log *and* head together |
 
 Target resolution uses **`WindowFromPoint`** — which window a click *actually*
-lands on, not the foreground window:
+lands on, not the foreground window. Actions with no coordinates (`click`,
+`scroll` at the cursor) resolve the real cursor position instead of falling back
+to the foreground window, and a `drag` is checked at both ends:
 
 ```json
 { "blocked_by_policy": true, "reason": "target process is on the deny list",
@@ -474,11 +484,18 @@ from its use.
 - **No continuous vision.** By design; see the event-driven section.
 - **OCR costs ~0.5–2.5 s** depending on whether the warm worker is alive.
 - **`type_text` needs focus** — `activate_window` + `click` first.
-- **One desktop-control server at a time.** The approval dialog's physical-input
-  filter cannot see UIAutomation invocations from another server; that is
-  [SECURITY.md](SECURITY.md) §4.1.
-- **The audit chain is tamper-evident, not tamper-proof.** Whoever can write the
-  file can rewrite the whole chain; it stops quiet edits.
+- **The dialog needs a physical decision.** If `alt+a` on the keyboard or a click
+  on *Allow* does not approve it, the injected-input filter is not seeing your
+  hardware as physical — run `node src/guard.js set physical off` (or untick
+  *物理输入校验* in the panel) to fall back to ordinary button clicks, and please
+  report it.
+- **Anything that can write files as you can still win.** It can replace
+  `guard.key`, roll back `guard.state.json` / `audit.head.json`, edit
+  `policy.json`, or run `host.ps1` directly. The signing, the watermark and the
+  chain head raise the bar and leave a trail; they are not a boundary.
+- **The audit chain is tamper-evident, not tamper-proof.** `verify` catches edits,
+  a deleted tail, a missing file and stripped hashes against the chain head; a
+  writer who rewrites the log *and* the head together is not detected.
 
 ---
 

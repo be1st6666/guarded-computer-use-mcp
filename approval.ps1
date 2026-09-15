@@ -48,6 +48,17 @@ try {
     exit 3
 }
 
+# ---- DPI awareness -----------------------------------------------------------
+# The injected-input filter compares the low-level hook's physical screen
+# coordinates with the Allow button's rectangle. A DPI-unaware process is
+# virtualised by Windows, so those two would not agree on a scaled display and a
+# real click on Allow would be mistaken for a non-physical one. Declare awareness
+# before any window exists.
+try {
+    Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class GcuDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'
+    [void][GcuDpi]::SetProcessDPIAware()
+} catch { }
+
 # ---- injected-input filter --------------------------------------------------
 # Installed before the dialog appears; the hook needs the message loop that
 # ShowDialog is about to run on this same thread.
@@ -101,6 +112,21 @@ public static class DshInputGuard
     public static int Swallowed;
     public static bool Installed;
 
+    // A human decision must be a PHYSICAL event, not a window message. A plain
+    // WinForms button can be activated by PostMessage(BM_CLICK) or
+    // WM_KEYDOWN from any same-user process without ever producing an injected
+    // input event, so the button's Click handler is not proof of anything while
+    // the filter is on. These two hooks see the real input, so they are what
+    // grants the allow; the Click handler only checks the flag they set.
+    public static bool PhysicalAllow;
+    public static int RectX, RectY, RectW, RectH;
+    private static bool altDown;
+
+    public static void SetAllowRect(int x, int y, int w, int h)
+    {
+        RectX = x; RectY = y; RectW = w; RectH = h;
+    }
+
     public static bool Install()
     {
         kbProc = new HookProc(KbCallback);
@@ -125,6 +151,14 @@ public static class DshInputGuard
         {
             KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             if ((k.flags & LLKHF_INJECTED) != 0) { Swallowed = Swallowed + 1; return (IntPtr)1; }
+
+            // Physical Alt+A. VK_MENU = 0x12, 'A' = 0x41.
+            int msg = wParam.ToInt32();
+            bool keyDown = (msg == 0x0100) || (msg == 0x0104);   // WM_KEYDOWN / WM_SYSKEYDOWN
+            bool keyUp = (msg == 0x0101) || (msg == 0x0105);     // WM_KEYUP   / WM_SYSKEYUP
+            if (k.vkCode == 0x12) { altDown = keyDown; }
+            else if (keyDown && k.vkCode == 0x41 && altDown) { PhysicalAllow = true; }
+            else if (keyUp && k.vkCode == 0x41) { /* nothing */ }
         }
         return CallNextHookEx(kbHook, nCode, wParam, lParam);
     }
@@ -135,6 +169,15 @@ public static class DshInputGuard
         {
             MSLLHOOKSTRUCT m = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
             if ((m.flags & LLMHF_INJECTED) != 0) { Swallowed = Swallowed + 1; return (IntPtr)1; }
+
+            // Physical left click inside the Allow button.
+            if (wParam.ToInt32() == 0x0201 && RectW > 0)     // WM_LBUTTONDOWN
+            {
+                if (m.ptX >= RectX && m.ptX <= RectX + RectW && m.ptY >= RectY && m.ptY <= RectY + RectH)
+                {
+                    PhysicalAllow = true;
+                }
+            }
         }
         return CallNextHookEx(mouseHook, nCode, wParam, lParam);
     }
@@ -265,6 +308,18 @@ $form.AcceptButton = $null
 
 $script:allowed = $false
 $allow.Add_Click({
+    # With the filter on, only a PHYSICAL event counts. A same-user process can
+    # PostMessage(BM_CLICK) to this button (or post WM_KEYDOWN to the form) and
+    # the Click event fires without any injected input event — so the click
+    # handler asks the hook whether a human really pressed it.
+    if ($injectedFilter -eq 'on' -and ('DshInputGuard' -as [type]) -and -not [DshInputGuard]::PhysicalAllow) {
+        $injectNote.Text = if ($zh) { '已忽略一次非物理的「允许」触发' } else { 'ignored a non-physical allow trigger' }
+        $injectNote.Visible = $true
+        # Console.Out, not Write-Output: output written from an event handler does
+        # not reach the script's stdout stream. The server captures this line.
+        try { [Console]::Out.WriteLine('ignored-non-physical-allow'); [Console]::Out.Flush() } catch { }
+        return
+    }
     $script:allowed = $true
     $script:result = if ($remember.Checked) { 4 } else { 0 }
     $form.Close()
@@ -283,6 +338,15 @@ $timer.Add_Tick({
     }
     $countdown.Text = if ($zh) { "还有 $left 秒自动拒绝" } else { "auto-deny in $left s" }
 
+    # The hook saw a physical Alt+A or a physical click on Allow.
+    if ($injectedFilter -eq 'on' -and ('DshInputGuard' -as [type]) -and [DshInputGuard]::PhysicalAllow) {
+        $script:allowed = $true
+        $script:result = if ($remember.Checked) { 4 } else { 0 }
+        $timer.Stop()
+        $form.Close()
+        return
+    }
+
     # Show bypass attempts instead of hiding them.
     if (('DshInputGuard' -as [type]) -and [DshInputGuard]::Swallowed -gt 0) {
         $n = [DshInputGuard]::Swallowed
@@ -298,6 +362,12 @@ $form.Add_Shown({
                             else { "auto-deny in $([int][math]::Ceiling($TimeoutMs / 1000)) s" }
     $form.Activate()
     $deny.Focus() | Out-Null          # deny has focus, not allow
+    # Tell the hook where "Allow" is, so a physical click there can be told apart
+    # from a posted message.
+    if ($injectedFilter -eq 'on' -and ('DshInputGuard' -as [type])) {
+        $r = $allow.RectangleToScreen($allow.ClientRectangle)
+        [DshInputGuard]::SetAllowRect($r.X, $r.Y, $r.Width, $r.Height)
+    }
 })
 
 $answer = $form.ShowDialog()

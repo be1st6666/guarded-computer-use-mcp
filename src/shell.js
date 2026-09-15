@@ -48,3 +48,24 @@ export const UV_CANDIDATES = [
 export function psFileArgs(script, args = []) {
   return ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args];
 }
+
+/**
+ * Environment for every child process we start.
+ *
+ * COMPUTER_USE_GUARD_SECRET is the one secret that must not leak: the host
+ * shell, the OCR worker and the approval dialog are all spawned by this server,
+ * and `launch_app` executes arbitrary programs *from the host shell*, so
+ * anything in this environment is reachable by a program the agent chooses to
+ * launch (`cmd /c set > file` was enough to read it). Children get everything
+ * else.
+ *
+ * Not a boundary against a same-user process — it can still read the server's
+ * own environment through the PEB — but it removes the trivial "ask the server
+ * to print its own env" path. See SECURITY.md §4.2.
+ */
+export function childEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.COMPUTER_USE_GUARD_SECRET;
+  delete env.COMPUTER_USE_GUARD_ALLOW_PLAIN;
+  return env;
+}

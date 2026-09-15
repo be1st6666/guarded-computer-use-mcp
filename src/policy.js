@@ -95,6 +95,36 @@ export const DEFAULT_POLICY = {
   ],
   approval_window_titles: ['发送', 'send', '远程桌面', 'remote desktop', '远程控制', 'remote control'],
   allow_processes: [], // non-empty switches to allow-list mode
+  /**
+   * Refused as `launch_app` targets. Launching a shell or a LOLBin hands the
+   * agent an unlimited capability, and the launched program is not the
+   * foreground window, so it cannot be judged by the window lists. Checked
+   * against the executable's basename, together with deny_processes.
+   */
+  deny_launch_targets: [
+    'cmd',
+    'cmd.exe',
+    'powershell',
+    'powershell.exe',
+    'pwsh',
+    'pwsh.exe',
+    'wscript',
+    'cscript',
+    'mshta',
+    'rundll32',
+    'regsvr32',
+    'bitsadmin',
+    'certutil',
+    'schtasks',
+    'wmic',
+    'msiexec',
+    'installutil',
+    'msbuild',
+    'forfiles',
+    'pcalua',
+    'conhost',
+    'wt.exe',
+  ],
   max_actions_per_minute: 120,
   audit: true,
   approval: {
@@ -245,6 +275,17 @@ export function rateExceeded(now = Date.now()) {
 /* ------------------------------------------------------------ the guard */
 
 /**
+ * A target plus any secondary targets the action also touches — a drag's release
+ * point, for example. Every one of them is checked: a drag that starts on the
+ * desktop and ends inside a password manager must not slip through.
+ */
+export function targetList(target) {
+  if (!target) return [];
+  const extra = Array.isArray(target.also) ? target.also : [];
+  return [target, ...extra];
+}
+
+/**
  * Hard refusal. Runs before approval: a denied target never reaches the dialog.
  * @returns {null|object} an MCP error result, or null when the action may run
  */
@@ -252,14 +293,16 @@ export function policyGuard(name, args, target) {
   if (!MUTATING.has(name)) return null;
   if (!guardEnabled()) return null; // master switch off: skip lists + limit
 
-  if (target && target.found !== false) {
-    const proc = target.process ?? '';
-    const title = target.title ?? '';
+  for (const t of targetList(target)) {
+    if (!t || t.found === false) continue;
+    const proc = t.process ?? '';
+    const title = t.title ?? '';
+    const where = t === target ? 'target' : 'secondary target';
 
     const badProc = matchesAny(proc, getPolicy().deny_processes);
     if (badProc) {
       return denied(
-        'target process is on the deny list',
+        `${where} process is on the deny list`,
         { process: proc, title, matched: badProc },
         `Edit ${policyPath()} to allow it.`,
       );
@@ -267,7 +310,7 @@ export function policyGuard(name, args, target) {
     const badTitle = matchesAny(title, getPolicy().deny_window_titles);
     if (badTitle) {
       return denied(
-        'target window title looks sensitive',
+        `${where} window title looks sensitive`,
         { process: proc, title, matched: badTitle },
         `Edit ${policyPath()} to allow it.`,
       );
@@ -275,7 +318,7 @@ export function policyGuard(name, args, target) {
     const allow = getPolicy().allow_processes ?? [];
     if (allow.length && !matchesAny(proc, allow)) {
       return denied(
-        'target process is not on the allow list',
+        `${where} process is not on the allow list`,
         { process: proc, title, allow },
         `Edit ${policyPath()} to allow it.`,
       );
@@ -313,8 +356,11 @@ export const DANGER_NAMES = [
 
 /** Destructive-looking action patterns, independent of the target window. */
 export function safetyCheck(name, args) {
-  if (args?.confirm === true) return null; // explicitly confirmed by the caller
-
+  // NOTE: `confirm` is deliberately NOT consulted here. It is an argument the
+  // model controls, so honouring it would let the model approve its own
+  // destructive action. The approval dialog is the only way through while the
+  // gate is on; `confirm` is honoured only when the operator has switched the
+  // gate off (see the caller).
   if (name === 'key' || name === 'hold_key') {
     const combo = String(args?.combo ?? args?.key ?? '');
     for (const re of DANGER_KEY_COMBOS) {
@@ -355,24 +401,48 @@ export function needsApproval(name, args, target) {
   if (patternCheck) return patternCheck;
 
   if (!MUTATING.has(name)) return null;
-  if (!target || target.found === false) return null;
 
-  const proc = matchesAny(target.process, getPolicy().approval_processes ?? []);
-  if (proc) {
-    return { reason: `process "${target.process}" always requires approval`, pattern: proc, source: 'list' };
-  }
-  const title = matchesAny(target.title, getPolicy().approval_window_titles ?? []);
-  if (title) {
-    return { reason: `window title "${target.title}" always requires approval`, pattern: title, source: 'list' };
+  for (const t of targetList(target)) {
+    if (!t || t.found === false) continue;
+    const where = t === target ? 'process' : 'secondary target process';
+    const proc = matchesAny(t.process, getPolicy().approval_processes ?? []);
+    if (proc) {
+      return { reason: `${where} "${t.process}" always requires approval`, pattern: proc, source: 'list' };
+    }
+    const title = matchesAny(t.title, getPolicy().approval_window_titles ?? []);
+    if (title) {
+      return { reason: `window title "${t.title}" always requires approval`, pattern: title, source: 'list' };
+    }
   }
   return null;
 }
 
 /**
- * Answer used when the action needs approval but no dialog was shown (the gate
- * is switched off, or the dialog could not start). Never an error by itself:
- * the caller may still re-issue with confirm:true — except for approval-list
- * targets, where confirm is deliberately not enough.
+ * Refuse a `launch_app` target that is a shell or a LOLBin, or that is on the
+ * process deny list. The launched program never appears as a window before it
+ * starts, so the window lists cannot see it — this is the only check that can.
+ * @returns {null|object} an MCP error result, or null when the launch may run
+ */
+export function launchGuard(args) {
+  if (!guardEnabled()) return null;
+  const raw = String(args?.target ?? '').trim();
+  if (!raw) return null;
+  const base = path.basename(raw.replace(/^"|"$/g, '')).toLowerCase();
+  const needles = [...(getPolicy().deny_launch_targets ?? []), ...(getPolicy().deny_processes ?? [])];
+  const hit = matchesAny(base, needles);
+  if (!hit) return null;
+  return denied(
+    'launch target is on the deny/launch list',
+    { target: raw, basename: base, matched: hit },
+    `Edit ${policyPath()} to allow it.`,
+  );
+}
+
+/**
+ * Answer used when the action needs approval but no dialog was shown because the
+ * operator switched the approval gate off. `confirm: true` is honoured only in
+ * this state: switching the gate off is an explicit decision to let the caller
+ * proceed without a human, and this response is what makes that visible.
  */
 export function pendingCheck(name, args, check, why = 'disabled') {
   const listTarget = check?.source === 'list';
@@ -391,12 +461,15 @@ export function pendingCheck(name, args, check, why = 'disabled') {
             matched: check.pattern,
             how_to_proceed: unknownTarget
               ? 'The window this action would land on could not be resolved, so the deny lists could ' +
-                'not be applied. Re-issue with confirm: true only if you know what is under the ' +
-                'cursor / what currently has focus.'
+                'not be applied. With the approval gate ON this would have been a dialog; the gate is ' +
+                'OFF, so re-issue with confirm: true only if you know what is under the cursor / what ' +
+                'currently has focus, or turn the gate back on (guard-panel.cmd).'
               : listTarget
                 ? 'Not proceeding: this target is on the always-ask list, so confirm:true does not ' +
                   'override it. Turn the approval gate back on (guard-panel.cmd) or do it yourself.'
-                : 'Re-issue the same call with confirm: true after the user agrees.',
+                : 'The approval gate is switched OFF, so no dialog was shown. Re-issue the same call ' +
+                  'with confirm: true after the user agrees — or turn the gate back on and answer the ' +
+                  'dialog instead.',
           },
           null,
           2,

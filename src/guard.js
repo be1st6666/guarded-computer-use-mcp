@@ -29,7 +29,7 @@
  * Set COMPUTER_USE_GUARD_ALLOW_PLAIN=1 to get the old "any file counts"
  * behaviour back; tampering is still logged.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -62,6 +62,28 @@ export function configure({ dir: d } = {}) {
   return dir;
 }
 export const keyPath = () => path.join(dir, KEY_NAME);
+
+/* --------------------------------------------------- accepted-marker state */
+
+const STATE_NAME = 'guard.state.json';
+const statePath = () => path.join(dir, STATE_NAME);
+
+function readState() {
+  try {
+    const s = JSON.parse(readFileSync(statePath(), 'utf8'));
+    return s && typeof s === 'object' ? s : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeState(state) {
+  try {
+    writeFileSync(statePath(), JSON.stringify(state, null, 2) + '\n');
+  } catch {
+    /* best effort: never break a tool call over the watermark */
+  }
+}
 
 const allowPlain = () => process.env.COMPUTER_USE_GUARD_ALLOW_PLAIN === '1';
 
@@ -108,8 +130,18 @@ export function guardSecret() {
   }
 }
 
-function sign(name, off, at) {
-  return createHmac('sha256', guardSecret()).update(`v1|${name}|${off}|${at}`).digest('hex');
+/**
+ * Signature over the marker's whole meaning: version, switch, state, timestamp
+ * and a per-switch counter.
+ *
+ * The counter is what makes a marker unreplayable: a captured marker carries a
+ * valid signature forever, so without a monotonic value anyone who can write
+ * files (but not read the key) could restore an old, legitimately signed marker
+ * and turn a layer back off. Timestamps alone are not enough — two toggles can
+ * land in the same millisecond.
+ */
+function sign(name, off, at, n) {
+  return createHmac('sha256', guardSecret()).update(`v1|${name}|${off}|${at}|${n}`).digest('hex');
 }
 
 /* ---------------------------------------------------- tamper bookkeeping */
@@ -156,7 +188,16 @@ export function _resetTamperState() {
 export function readSwitch(name) {
   const p = markerPath(name);
   const base = { name, path: p, exists: false, off: false, signed: false, tampered: false, at: null, reason: null };
-  if (!existsSync(p)) return base;
+  if (!existsSync(p)) {
+    // Note the switch going away: a marker that reappears afterwards with a
+    // counter we have already accepted is a replay, not the same live marker.
+    const st = readState();
+    if (st[name] && st[name].live === true) {
+      st[name] = { ...st[name], live: false };
+      writeState(st);
+    }
+    return base;
+  }
 
   let raw;
   try {
@@ -173,7 +214,14 @@ export function readSwitch(name) {
     /* not JSON */
   }
 
-  if (!doc || typeof doc !== 'object' || doc.v !== 1 || doc.switch !== name || typeof doc.at !== 'string') {
+  if (
+    !doc ||
+    typeof doc !== 'object' ||
+    doc.v !== 1 ||
+    doc.switch !== name ||
+    typeof doc.at !== 'string' ||
+    typeof doc.n !== 'number'
+  ) {
     const why = 'not a signed guard-panel marker';
     if (allowPlain()) {
       noteTamper(name, `${why} (honoured: COMPUTER_USE_GUARD_ALLOW_PLAIN=1)`, raw.slice(0, 120));
@@ -183,7 +231,7 @@ export function readSwitch(name) {
     return { ...base, exists: true, tampered: true, reason: why };
   }
 
-  const expect = sign(name, doc.off === true, doc.at);
+  const expect = sign(name, doc.off === true, doc.at, doc.n);
   const got = typeof doc.sig === 'string' ? doc.sig : '';
   let ok;
   try {
@@ -201,6 +249,28 @@ export function readSwitch(name) {
     noteTamper(name, why, null);
     return { ...base, exists: true, tampered: true, reason: why };
   }
+
+  // Replay check: a captured marker carries a valid signature forever, so the
+  // watermark (highest counter accepted, plus the signature that carried it) is
+  // what makes restoring an old one detectable and refused. Re-reading the marker
+  // that is still in place is fine; the same counter turning up after the switch
+  // was cleared is not. An attacker who can also roll the watermark back defeats
+  // this — it raises the bar rather than being a boundary.
+  const state = readState();
+  const seen = state[name] && typeof state[name] === 'object' ? state[name] : {};
+  const seenN = typeof seen.n === 'number' ? seen.n : 0;
+  const stillLive = seen.live === true && doc.n === seenN && doc.sig === seen.sig;
+  if (doc.n < seenN || (doc.n === seenN && !stillLive)) {
+    const why = `replayed marker (counter ${doc.n}; the accepted state is ${seenN}${seen.live === false ? ', and the switch was cleared since' : ''})`;
+    if (allowPlain()) {
+      noteTamper(name, `${why} (honoured: COMPUTER_USE_GUARD_ALLOW_PLAIN=1)`, null);
+      return { ...base, exists: true, off: doc.off === true, tampered: true, reason: 'replay (allowed by env)' };
+    }
+    noteTamper(name, why, null);
+    return { ...base, exists: true, tampered: true, reason: why };
+  }
+  state[name] = { n: doc.n, at: doc.at, sig: doc.sig, live: true };
+  writeState(state);
 
   return { ...base, exists: true, off: doc.off === true, signed: true, at: doc.at, reason: null };
 }
@@ -232,10 +302,17 @@ export function setSwitch(name, off) {
   try {
     if (!off) {
       if (existsSync(p)) unlinkSync(p);
+      const st = readState();
+      if (st[name]) {
+        st[name] = { ...st[name], live: false };
+        writeState(st);
+      }
       return { ok: true, name, off: false, path: p };
     }
+    const state = readState();
+    const n = ((state[name] && typeof state[name].n === 'number' ? state[name].n : 0) || 0) + 1;
     const at = new Date().toISOString();
-    const doc = { v: 1, switch: name, off: true, at, by: 'guard-panel', sig: sign(name, true, at) };
+    const doc = { v: 1, switch: name, off: true, at, n, by: 'guard-panel', sig: sign(name, true, at, n) };
     writeFileSync(p, JSON.stringify(doc, null, 2) + '\n');
     return { ok: true, name, off: true, path: p };
   } catch (e) {
@@ -258,6 +335,12 @@ export function secretStatus() {
   return {
     source: process.env.COMPUTER_USE_GUARD_SECRET ? 'environment' : existsSync(keyPath()) ? 'guard.key' : 'none',
     keyPath: keyPath(),
+    /**
+     * Fingerprint of the key actually in use. The audit log records this at
+     * startup, so swapping guard.key for one the attacker knows is visible from
+     * one run to the next.
+     */
+    fingerprint: createHash('sha256').update(guardSecret()).digest('hex').slice(0, 12),
     warning: secretWarning,
     allowPlain: allowPlain(),
   };

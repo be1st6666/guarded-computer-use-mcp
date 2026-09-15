@@ -19,13 +19,71 @@
  *   * the dialog ends with exit code 2 (timeout -> auto-deny)
  *   * the dialog counted the ignored injections
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { writeFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { ROOT } from '../src/paths.js';
 import { host } from '../src/host.js';
 
 const TIMEOUT_MS = 6000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Posts window messages at the live dialog: BM_CLICK on the real Allow button
+ * and a posted Alt+A to the form. Neither produces an input event, so the
+ * low-level hooks cannot see them — this is the attack the dialog must survive
+ * by demanding a *physical* event.
+ */
+const MESSAGE_ATTACK_PS1 = String.raw`
+param([int]$TargetPid)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class MsgAttack {
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr p);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public delegate bool EnumProc(IntPtr h, IntPtr p);
+  public static IntPtr Form = IntPtr.Zero;
+  public static IntPtr Button = IntPtr.Zero;
+  public static string ButtonText = "";
+  public static void Find(uint pid) {
+    EnumWindows(delegate(IntPtr h, IntPtr p) {
+      uint wp; GetWindowThreadProcessId(h, out wp);
+      if (wp != pid) return true;
+      StringBuilder t = new StringBuilder(256); GetWindowText(h, t, 256);
+      if (t.Length == 0) return true;
+      Form = h; return false;
+    }, IntPtr.Zero);
+    if (Form == IntPtr.Zero) return;
+    EnumChildWindows(Form, delegate(IntPtr h, IntPtr p) {
+      StringBuilder c = new StringBuilder(256); GetClassName(h, c, 256);
+      if (c.ToString().StartsWith("WindowsForms10.Button")) {
+        StringBuilder t = new StringBuilder(256); GetWindowText(h, t, 256);
+        if (Button == IntPtr.Zero) { Button = h; ButtonText = t.ToString(); }
+        if (t.ToString().Contains("(&A)") || t.ToString().Contains("\u5141\u8bb8")) { Button = h; ButtonText = t.ToString(); return false; }
+      }
+      return true;
+    }, IntPtr.Zero);
+  }
+}
+'@
+[MsgAttack]::Find([uint32]$TargetPid)
+if ([MsgAttack]::Form -eq [IntPtr]::Zero) { Write-Output 'NO_FORM'; exit 1 }
+Write-Output ("form=" + [MsgAttack]::Form + " button=[" + [MsgAttack]::ButtonText + "]")
+if ([MsgAttack]::Button -ne [IntPtr]::Zero) {
+  [void][MsgAttack]::PostMessage([MsgAttack]::Button, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+  Write-Output 'posted BM_CLICK'
+}
+[void][MsgAttack]::PostMessage([MsgAttack]::Form, 0x0104, [IntPtr]0x12, [IntPtr]::Zero)
+[void][MsgAttack]::PostMessage([MsgAttack]::Form, 0x0104, [IntPtr]0x41, [IntPtr]::Zero)
+Write-Output 'posted WM_SYSKEYDOWN alt+a'
+`;
 
 if (process.env.CI === '1' || process.env.CI === 'true') {
   console.log('SKIP approval-inject: needs an interactive desktop (CI=1)');
@@ -95,6 +153,26 @@ try {
   await sleep(700);
   check(child.exitCode === null && /@/.test(clicked),
     'injected click on Allow did not answer the dialog', clicked);
+
+  // 3. The message path: injected input is not the only way to activate a
+  //    WinForms button. PostMessage(BM_CLICK) to the real Allow button, and a
+  //    posted Alt+A to the form, produce no input event at all — the hook never
+  //    sees them. The dialog must refuse to treat them as a human decision.
+  const attack = path.join(os.tmpdir(), `gcu-msg-attack-${process.pid}.ps1`);
+  writeFileSync(attack, MESSAGE_ATTACK_PS1);
+  const atk = spawnSync(
+    shell,
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', attack, '-TargetPid', String(child.pid)],
+    { encoding: 'utf8', windowsHide: true },
+  );
+  rmSync(attack, { force: true });
+  const atkOut = `${atk.stdout ?? ''}${atk.stderr ?? ''}`.trim();
+  await sleep(900);
+  check(child.exitCode === null, 'posted BM_CLICK / WM_SYSKEYDOWN did not answer the dialog',
+    child.exitCode === null ? atkOut.split('\n').slice(0, 3).join(' | ') : `exited early with ${child.exitCode}`);
+  check(/ignored-non-physical-allow/.test(out),
+    'the dialog logged the non-physical allow trigger as ignored',
+    /posted BM_CLICK/.test(atkOut) ? 'BM_CLICK was delivered' : `message attack output: ${atkOut.slice(0, 120)}`);
 
   const code = await Promise.race([exited, sleep(TIMEOUT_MS + 6000).then(() => 'hung')]);
   if (code === 'hung') {

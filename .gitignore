@@ -5,7 +5,9 @@ node_modules/
 # runtime state — never commit these
 audit.jsonl
 audit-*.jsonl
+audit.head.json
 guard.key
+guard.state.json
 .approval-off
 .guard-off
 .audit-off

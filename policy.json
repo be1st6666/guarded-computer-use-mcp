@@ -61,6 +61,14 @@
   "_allow_comment": "Non-empty switches to allow-list mode: only these processes may be operated at all.",
   "allow_processes": [],
 
+  "_launch_comment": "Refused as launch_app targets (matched against the executable basename, case-insensitive, together with deny_processes). Launching a shell or a LOLBin hands the agent an unlimited capability, and the launched program is not a window the other lists can see.",
+  "deny_launch_targets": [
+    "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+    "wscript", "cscript", "mshta", "rundll32", "regsvr32", "bitsadmin",
+    "certutil", "schtasks", "wmic", "msiexec", "installutil", "msbuild",
+    "forfiles", "pcalua", "conhost", "wt.exe"
+  ],
+
   "max_actions_per_minute": 120,
 
   "_audit_comment": "true/false, or { enabled, redact (default true), max_bytes (rotate past this size) }.",

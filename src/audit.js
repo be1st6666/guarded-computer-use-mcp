@@ -26,6 +26,7 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
+  writeFileSync,
   renameSync,
   statSync,
   readdirSync,
@@ -226,6 +227,37 @@ function rotateIfNeeded() {
   }
 }
 
+/* ------------------------------------------------------- chain head (anchor) */
+
+/**
+ * A small sidecar recording how far the current segment got.
+ *
+ * The chain alone cannot notice that its own tail was deleted: a truncated log
+ * is still a perfectly valid chain. The head file is what makes deletion
+ * visible — `verify` compares the file against it. Same trust caveat as
+ * everything else here: an attacker who can write the log can also rewrite the
+ * head, so this detects a partial edit, not a determined rewrite.
+ */
+function headPath() {
+  return path.join(path.dirname(cfg.file), 'audit.head.json');
+}
+
+function readHead() {
+  try {
+    return JSON.parse(readFileSync(headPath(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeHead(entry) {
+  try {
+    writeFileSync(headPath(), JSON.stringify(entry) + '\n');
+  } catch {
+    /* the head is best-effort: never break the tool path for it */
+  }
+}
+
 /* ------------------------------------------------------------------ writing */
 
 /**
@@ -261,6 +293,7 @@ export function record({ op, args = {}, target = null, ok = true, note = null } 
     c.hash = hash;
     c.broke = false; // the reset is recorded once, not stamped on every record
     c.legacy = false;
+    writeHead({ file: path.basename(cfg.file), seq, hash, updated: payload.t });
     if (cfg.alsoStderr) process.stderr.write(`[audit] ${line}\n`);
     return { ...payload, prev, hash };
   } catch (e) {
@@ -272,19 +305,33 @@ export function record({ op, args = {}, target = null, ok = true, note = null } 
 /* ---------------------------------------------------------------- verifying */
 
 /**
- * Verify one log segment.
+ * Verify one log segment against its own chain and against the chain head.
  *
  * Legacy records (written before hash chaining existed) are reported as such and
  * do not count as tampering: the whole point is to be able to upgrade an
- * existing audit.jsonl without declaring it forged. A line that is not JSON at
- * all, or a hashed record whose link/hash does not check out, is a problem.
+ * existing audit.jsonl without declaring it forged. A line that is not JSON, a
+ * record that lost its hash inside a chained segment, a broken link, or a file
+ * that no longer reaches the recorded chain head *is* a problem.
  *
  * @returns {{file:string, records:number, legacy:number, ok:boolean,
- *            problems:Array<{line:number, why:string, legacy?:boolean}>}}
+ *            problems:Array<{line:number, why:string, legacy?:boolean}>,
+ *            head:object|null, headNote:string|null}}
  */
 export function verifyFile(file) {
   const problems = [];
-  if (!existsSync(file)) return { file, records: 0, legacy: 0, ok: true, problems, absent: true };
+  const head = readHead();
+  const headHere = head && head.file === path.basename(file) ? head : null;
+
+  if (!existsSync(file)) {
+    if (headHere) {
+      problems.push({
+        line: 0,
+        why: `log file is missing but the chain head records seq ${headHere.seq} (deleted?)`,
+      });
+      return { file, records: 0, legacy: 0, ok: false, problems, absent: true, head: headHere };
+    }
+    return { file, records: 0, legacy: 0, ok: true, problems, absent: true, head: null };
+  }
 
   const lines = readFileSync(file, 'utf8')
     .split('\n')
@@ -293,6 +340,12 @@ export function verifyFile(file) {
   let lastSeq = null;
   let count = 0; // chained records
   let legacy = 0; // pre-chain records
+
+  // Records written before hash chaining existed sit at the START of the file;
+  // anything hashless AFTER a chained record is a stripped hash, not history.
+  // (A file whose hashes were all stripped is caught by the chain-head check
+  // below, which still remembers how far the segment got.)
+  let seenChained = false;
 
   lines.forEach((line, i) => {
     let doc;
@@ -304,10 +357,15 @@ export function verifyFile(file) {
     }
 
     if (typeof doc.hash !== 'string' || doc.hash.length !== 64) {
+      if (seenChained) {
+        problems.push({ line: i + 1, why: 'record without a hash after a chained record (hash stripped)' });
+        return;
+      }
       legacy++;
       problems.push({ line: i + 1, why: 'legacy record (written before hash chaining)', legacy: true });
       return;
     }
+    seenChained = true;
 
     const payload = payloadOf(doc);
     const hash = hashOf(doc.prev ?? '', payload);
@@ -333,8 +391,31 @@ export function verifyFile(file) {
     count++;
   });
 
+  // The head is the only thing that can notice a deleted tail or a wholesale
+  // strip: a truncated or hashless log is still a valid file on its own.
+  let headNote = null;
+  if (headHere) {
+    if (count === 0 && (headHere.seq ?? 0) > 0) {
+      problems.push({
+        line: 0,
+        why: `no chained record is left, but the chain head recorded seq ${headHere.seq} (hashes stripped or log replaced)`,
+      });
+    } else if (count > 0 && typeof lastSeq === 'number' && lastSeq < headHere.seq) {
+      problems.push({
+        line: 0,
+        why: `records deleted: the chain head recorded seq ${headHere.seq}, this file ends at ${lastSeq}`,
+      });
+    } else if (count > 0 && expectedPrev !== headHere.hash) {
+      problems.push({ line: 0, why: 'the last record does not match the chain head (tail rewritten)' });
+    } else {
+      headNote = `matches the chain head (seq ${headHere.seq})`;
+    }
+  } else {
+    headNote = 'no chain head recorded — a deleted tail cannot be detected';
+  }
+
   const hard = problems.filter((p) => !p.legacy);
-  return { file, records: count, legacy, ok: hard.length === 0, problems };
+  return { file, records: count, legacy, ok: hard.length === 0, problems, head: headHere, headNote };
 }
 
 /** Verify audit.jsonl and every rotated segment next to it. */
@@ -377,15 +458,16 @@ function cli(argv) {
     const { results } = rest.length ? { results: rest.map(verifyFile) } : verifyAll();
     let bad = 0;
     for (const r of results) {
-      if (r.absent) {
+      if (r.absent && r.ok) {
         process.stdout.write(`${path.basename(r.file)}: absent\n`);
         continue;
       }
       const legacy = r.legacy ? `, ${r.legacy} legacy` : '';
       process.stdout.write(`${path.basename(r.file)}: ${r.records} chained${legacy} — ${r.ok ? 'OK' : 'TAMPERED'}\n`);
+      if (r.headNote) process.stdout.write(`  head: ${r.headNote}\n`);
       for (const p of r.problems) {
         if (p.legacy) continue;
-        process.stdout.write(`  line ${p.line}: ${p.why}\n`);
+        process.stdout.write(p.line ? `  line ${p.line}: ${p.why}\n` : `  ${path.basename(r.file)}: ${p.why}\n`);
       }
       if (r.legacy && r.records === 0) {
         process.stdout.write('  (pre-hash format: those records cannot be verified, only new ones are chained)\n');

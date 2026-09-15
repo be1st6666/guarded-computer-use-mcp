@@ -36,6 +36,7 @@ import {
   auditEnabled,
   approvalEnabled,
   policyGuard,
+  launchGuard,
   needsApproval,
   pendingCheck,
 } from './src/policy.js';
@@ -44,7 +45,9 @@ import {
   blockedWhileApprovalPending,
   requestApproval,
   approvalDenied,
+  approvalBusy,
   isSessionApproved,
+  rememberSession,
   APPROVAL_SCRIPT,
 } from './src/approval.js';
 
@@ -71,13 +74,24 @@ function auditOptions() {
   };
 }
 
+/**
+ * Did the action actually run? A pending_safety_check / refused answer is not a
+ * successful action, so it must not be logged as ok:true.
+ */
+function resultRan(result) {
+  if (!result || result.isError) return false;
+  const first = result.content?.[0]?.text ?? '';
+  return !/"pending_safety_check"\s*:\s*true/.test(first);
+}
+
 function writeAudit(name, args, result, target) {
+  const ran = resultRan(result);
   audit.record({
     op: name,
     args,
     target: target ? { process: target.process ?? null, title: target.title ?? null } : null,
-    ok: !result?.isError,
-    note: result?.isError ? shortReason(result) : null,
+    ok: ran,
+    note: ran ? null : (shortReason(result) ?? 'not executed'),
   });
 }
 
@@ -138,22 +152,15 @@ function tool(name, config, fn) {
         return withNotices(mid);
       }
 
-      // 3. 目标未知就 fail closed：两个名单都依赖"这个动作会落在哪个窗口上"，
-      //    解析不出来时不能当作"没匹配"直接放行（那等于给了一条绕过名单的路）。
-      //    默认转成待确认，只有调用方显式 confirm 才继续。
-      if (MUTATING.has(name) && args?.confirm !== true && (!target || target.found === false)) {
-        const pending = pendingCheck(
-          name,
-          args,
-          {
-            reason: 'the target window could not be resolved, so the deny lists cannot be applied',
-            pattern: 'target-unknown',
-            source: 'unknown',
-          },
-          'unavailable',
-        );
-        writeAudit(name, args, pending, target);
-        return withNotices(pending);
+      // 3. 目标未知时不能当作"没匹配"直接放行 —— 那样黑名单就形同虚设。改成
+      //    走正常的审批流程：弹窗（或在弹窗关闭时返回 pending）里写明原因。
+      const unknownTarget = MUTATING.has(name) && (!target || target.found === false);
+
+      // 4. launch_app 的"目标"是它将启动的程序，窗口名单看不见它，单独查
+      const launchBlocked = name === 'launch_app' ? launchGuard(args) : null;
+      if (launchBlocked) {
+        writeAudit(name, args, launchBlocked, target);
+        return withNotices(launchBlocked);
       }
 
       const blocked = policyGuard(name, args, target);
@@ -162,18 +169,41 @@ function tool(name, config, fn) {
         return withNotices(blocked);
       }
 
-      const check = needsApproval(name, args, target);
+      const check = unknownTarget
+        ? {
+            reason: 'the target window could not be resolved, so the deny lists cannot be applied',
+            pattern: 'target-unknown',
+            source: 'unknown',
+          }
+        : needsApproval(name, args, target);
+
       if (check) {
-        if (isSessionApproved(name, target)) {
+        if (!unknownTarget && isSessionApproved(name, target, args)) {
           // 用户在本会话里勾选了"记住这个目标"，直接放行
         } else if (approvalEnabled()) {
+          // 弹窗是唯一的人工放行通道：confirm 是模型自己传的参数，不能当授权
           const code = await requestApproval(name, args, check, target, describeForDialog);
-          if (code !== 0) {
+          if (code === 5) {
+            const busy = approvalBusy(name);
+            writeAudit(name, args, busy, target);
+            return withNotices(busy);
+          }
+          if (code === 4 && target?.__source !== 'active') rememberSession(name, target, args);
+          if (code !== 0 && code !== 4) {
             const res = approvalDenied(name, args, check, code);
             writeAudit(name, args, res, target);
             return withNotices(res);
           }
           // 用户点了允许 —— 继续执行
+        } else if (args?.confirm === true && check.source !== 'list') {
+          // 审批弹窗被操作者显式关闭时才走到这里：confirm 是"我知道我在做什么"的
+          // 声明，而不是人授权。关闭弹窗本身就是这个决定。
+          writeAudit(
+            name,
+            args,
+            { content: [{ type: 'text', text: 'approval gate is off; proceeded on confirm:true' }] },
+            target,
+          );
         } else {
           const pending = pendingCheck(name, args, check, 'disabled');
           writeAudit(name, args, pending, target);
@@ -368,20 +398,24 @@ tool(
 
       const stepTarget = await resolveTarget(step.op, stepArgs);
 
-      // 同一个 fail closed 规则：解析不出目标就不在批里执行这一步
-      if (MUTATING.has(step.op) && stepArgs?.confirm !== true && (!stepTarget || stepTarget.found === false)) {
-        const pending = pendingCheck(
-          step.op,
-          stepArgs,
-          {
-            reason: 'the target window could not be resolved, so the deny lists cannot be applied',
-            pattern: 'target-unknown',
-            source: 'unknown',
-          },
-          'unavailable',
-        );
-        writeAudit(step.op, stepArgs, pending, stepTarget);
-        content.push({ type: 'text', text: `${label}: BLOCKED — target window could not be resolved (fail closed)` });
+      // 解析目标本身要 await（UIA 查找可达数百毫秒），这段时间里另一个并行调用
+      // 完全可能把弹窗打开 —— 所以 await 之后必须再查一次门锁，否则批里的注入
+      // 动作仍能替用户按下那个按钮。
+      const lateBlock = blockedWhileApprovalPending(step.op) ?? blockedWhileApprovalPending('batch');
+      if (lateBlock) {
+        writeAudit(step.op, stepArgs, lateBlock, stepTarget);
+        content.push({
+          type: 'text',
+          text: `${label}: BLOCKED — an approval dialog opened while this batch was preparing; batch stops here`,
+        });
+        break;
+      }
+
+      // launch_app 的目标是它要启动的程序，窗口名单看不见，单独查
+      const stepLaunch = step.op === 'launch_app' ? launchGuard(stepArgs) : null;
+      if (stepLaunch) {
+        writeAudit(step.op, stepArgs, stepLaunch, stepTarget);
+        content.push({ type: 'text', text: `${label}: BLOCKED BY POLICY — ${shortReason(stepLaunch) ?? 'denied'}` });
         continue;
       }
 
@@ -393,7 +427,15 @@ tool(
         continue;
       }
 
-      const check = needsApproval(step.op, stepArgs, stepTarget);
+      // 目标未知 = 需要人工确认，批处理里不弹窗，跳过该步
+      const check =
+        MUTATING.has(step.op) && (!stepTarget || stepTarget.found === false)
+          ? {
+              reason: 'the target window could not be resolved, so the deny lists cannot be applied',
+              pattern: 'target-unknown',
+              source: 'unknown',
+            }
+          : needsApproval(step.op, stepArgs, stepTarget);
       if (check) {
         // 批处理里不弹窗（会打断整批），直接跳过该步并说明原因
         content.push({
@@ -407,6 +449,13 @@ tool(
       if (!fn) {
         content.push({ type: 'text', text: `${label}: unknown tool` });
         continue;
+      }
+      // 最后一道：紧贴执行前再确认一次没有弹窗在等
+      const finalBlock = blockedWhileApprovalPending(step.op) ?? blockedWhileApprovalPending('batch');
+      if (finalBlock) {
+        writeAudit(step.op, stepArgs, finalBlock, stepTarget);
+        content.push({ type: 'text', text: `${label}: BLOCKED — an approval dialog is waiting; batch stops here` });
+        break;
       }
       const res = await fn(step.args ?? {}, {});
       writeAudit(step.op, stepArgs, res, stepTarget);
@@ -514,11 +563,19 @@ tool(
       y: z.number().int().optional(),
       button: z.enum(['left', 'right', 'middle']).optional().describe('Default: left'),
       count: z.number().int().min(1).max(5).optional().describe('Default: 1'),
-      confirm: z.boolean().optional().describe('Set true to proceed after a pending_safety_check'),
+      confirm: z
+        .boolean()
+        .optional()
+        .describe('Only honoured while the approval gate is switched off; with the gate on the dialog decides'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   async ({ x, y, button, count }) => {
+    // host.ps1 casts a missing y to 0, so half a coordinate pair would click at
+    // (x, 0) — in a window the policy never checked.
+    if ((x === undefined) !== (y === undefined)) {
+      throw new Error('give both x and y, or neither (neither = click at the cursor)');
+    }
     await host.call('click', { x, y, button: button ?? 'left', count: count ?? 1 });
     return text(`clicked ${button ?? 'left'} x${count ?? 1} at ${x === undefined ? 'cursor' : `(${x}, ${y})`}`);
   },
@@ -559,6 +616,9 @@ tool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async ({ x, y, direction, amount }) => {
+    if ((x === undefined) !== (y === undefined)) {
+      throw new Error('give both x and y, or neither (neither = scroll at the cursor)');
+    }
     const r = await host.call('scroll', { x, y, direction: direction ?? 'down', amount: amount ?? 3 });
     return text(`scrolled ${direction ?? 'down'} ${Math.abs(r.notches)} notch(es)`);
   },
@@ -589,7 +649,10 @@ tool(
     description: 'Press a key or chord, e.g. "enter", "esc", "f5", "ctrl+c", "ctrl+shift+s", "alt+f4", "win+d".',
     inputSchema: {
       combo: z.string().describe('Key or "+"-joined chord'),
-      confirm: z.boolean().optional().describe('Set true to proceed after a pending_safety_check'),
+      confirm: z
+        .boolean()
+        .optional()
+        .describe('Only honoured while the approval gate is switched off; with the gate on the dialog decides'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
@@ -607,7 +670,10 @@ tool(
     inputSchema: {
       key: z.string(),
       ms: z.number().int().min(1).max(10000),
-      confirm: z.boolean().optional().describe('Set true to proceed after a pending_safety_check'),
+      confirm: z
+        .boolean()
+        .optional()
+        .describe('Only honoured while the approval gate is switched off; with the gate on the dialog decides'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
@@ -735,10 +801,26 @@ tool(
 /** 解析动作的目标窗口（只对会产生副作用的工具做） */
 async function resolveTarget(name, args) {
   if (!MUTATING.has(name)) return null;
+  const tag = (t, source) => (t ? Object.assign(t, { __source: source }) : t);
   try {
-    // 坐标类动作：WindowFromPoint 精确判定点击落在谁身上
-    if (typeof args?.x === 'number' && typeof args?.y === 'number') {
-      return await host.call('window_at', { x: args.x, y: args.y });
+    // 坐标类动作：WindowFromPoint 精确判定点击落在谁身上。
+    // 没给坐标 = 在光标处操作（host.ps1 用当前光标），所以必须取真实光标位置来判定，
+    // 否则这类调用会退回"前台窗口"，与它实际作用的对象不一致。
+    let px = args?.x;
+    let py = args?.y;
+    if ((name === 'click' || name === 'scroll') && (typeof px !== 'number' || typeof py !== 'number')) {
+      const c = await host.call('cursor_position');
+      if (typeof px !== 'number') px = c.x;
+      if (typeof py !== 'number') py = c.y;
+    }
+    if (typeof px === 'number' && typeof py === 'number') {
+      const t = tag(await host.call('window_at', { x: px, y: py }), 'point');
+      // 拖拽的落点同样要检查：从桌面拖进密码管理器不能被放过
+      if (name === 'drag' && typeof args?.x2 === 'number' && typeof args?.y2 === 'number' && t) {
+        const drop = tag(await host.call('window_at', { x: args.x2, y: args.y2 }), 'point');
+        if (drop && drop.found !== false) t.also = [drop];
+      }
+      return t;
     }
     // 语义点击：目标窗口可能不是前台窗口，必须先找到元素再判定
     if (name === 'click_element') {
@@ -753,10 +835,10 @@ async function resolveTarget(name, args) {
       });
       const el = found?.elements?.[idx];
       if (el?.center) {
-        return await host.call('window_at', { x: el.center[0], y: el.center[1] });
+        return tag(await host.call('window_at', { x: el.center[0], y: el.center[1] }), 'element');
       }
     }
-    return await host.call('active_window');
+    return tag(await host.call('active_window'), 'active');
   } catch (e) {
     process.stderr.write(`[policy] target lookup failed: ${e.message}\n`);
     return null;
@@ -832,7 +914,10 @@ tool(
     inputSchema: {
       ...ELEM_QUERY,
       index: z.number().int().min(0).optional().describe('Which match, default 0'),
-      confirm: z.boolean().optional().describe('Set true to proceed after a pending_safety_check'),
+      confirm: z
+        .boolean()
+        .optional()
+        .describe('Only honoured while the approval gate is switched off; with the gate on the dialog decides'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },

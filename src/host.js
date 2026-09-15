@@ -9,7 +9,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { ROOT } from './paths.js';
-import { SHELL_CANDIDATES } from './shell.js';
+import { SHELL_CANDIDATES, childEnv } from './shell.js';
 
 export const HOST_SCRIPT = path.join(ROOT, 'host.ps1');
 
@@ -18,7 +18,7 @@ function spawnCandidate(cmd) {
     const ps = spawn(
       cmd,
       ['-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HOST_SCRIPT],
-      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
+      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: childEnv() },
     );
     let settled = false;
     ps.once('error', (e) => {

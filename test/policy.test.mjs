@@ -214,11 +214,15 @@ test('safetyCheck flags destructive key combos, right-click and destructive elem
   assert.equal(safetyCheck('key', { combo: 'ctrl+s' }), null);
 });
 
-test('safetyCheck returns null when args.confirm === true', () => {
-  assert.equal(safetyCheck('key', { combo: 'alt+f4', confirm: true }), null);
-  assert.equal(safetyCheck('click', { x: 1, y: 1, button: 'right', confirm: true }), null);
-  assert.equal(safetyCheck('click_element', { name: '删除全部', confirm: true }), null);
-  assert.notEqual(safetyCheck('key', { combo: 'alt+f4', confirm: 'yes' }), null, 'only boolean true confirms');
+test('confirm:true does NOT silence the danger patterns (the dialog is the gate)', () => {
+  // `confirm` is an argument the model controls. If it cleared these checks, the
+  // model could approve its own alt+f4 / right-click / "delete all" click with no
+  // human involved. It is honoured only when the operator has switched the
+  // approval gate off, and that decision is made by the caller, not here.
+  assert.notEqual(safetyCheck('key', { combo: 'alt+f4', confirm: true }), null);
+  assert.notEqual(safetyCheck('click', { x: 1, y: 1, button: 'right', confirm: true }), null);
+  assert.notEqual(safetyCheck('click_element', { name: '删除全部', confirm: true }), null);
+  assert.equal(safetyCheck('key', { combo: 'ctrl+s', confirm: true }), null, 'safe combos stay safe');
 });
 
 test('needsApproval returns source:list for an approval-list process and null for read-only tools', () => {
@@ -275,8 +279,20 @@ test("pendingCheck explains that confirm:true will NOT override a source:'list' 
   const patternCheck = { reason: 'key combo "alt+f4" is destructive', pattern: '/alt\\+f4/i', source: 'pattern' };
   const p = jsonOf(pendingCheck('key', { combo: 'alt+f4' }, patternCheck, 'unavailable'));
   assert.equal(p.approval_gate, 'unavailable');
-  assert.equal(p.how_to_proceed, 'Re-issue the same call with confirm: true after the user agrees.');
+  assert.match(p.how_to_proceed, /approval gate is switched OFF/);
+  assert.match(p.how_to_proceed, /confirm: true/);
   assert.equal(p.matched, '/alt\\+f4/i');
+
+  const unknown = jsonOf(
+    pendingCheck(
+      'click',
+      { x: 1, y: 1 },
+      { reason: 'the target window could not be resolved, so the deny lists cannot be applied', pattern: 'target-unknown', source: 'unknown' },
+      'disabled',
+    ),
+  );
+  assert.match(unknown.how_to_proceed, /could not be resolved/);
+  assert.match(unknown.how_to_proceed, /turn the gate back on/);
 });
 
 test('MUTATING and GATED_WHILE_DIALOG have the documented membership', () => {

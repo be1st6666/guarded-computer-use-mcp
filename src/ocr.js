@@ -9,7 +9,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { ROOT } from './paths.js';
-import { UV_CANDIDATES } from './shell.js';
+import { UV_CANDIDATES, childEnv } from './shell.js';
 
 export const OCR_SCRIPT = path.join(ROOT, 'ocr.ps1');
 export const RAPID_SCRIPT = path.join(ROOT, 'ocr_rapid.py');
@@ -49,6 +49,7 @@ export function runWindowsOcr(rectArgs) {
   return collectJson(
     spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', OCR_SCRIPT, ...rectArgs], {
       windowsHide: true,
+      env: childEnv(),
     }),
     'windows-ocr',
   );
@@ -59,7 +60,7 @@ function spawnUv(uv) {
     const ps = spawn(uv, ['run', '--no-project', '--with', 'rapidocr-onnxruntime', 'python', RAPID_SCRIPT, '--serve'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...process.env, UV_HTTP_TIMEOUT: '180' },
+      env: childEnv({ UV_HTTP_TIMEOUT: '180' }),
     });
     let settled = false;
     ps.once('error', (e) => {

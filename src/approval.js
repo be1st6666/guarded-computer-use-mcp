@@ -24,7 +24,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { ROOT } from './paths.js';
-import { SHELL_CANDIDATES, psFileArgs } from './shell.js';
+import { SHELL_CANDIDATES, psFileArgs, childEnv } from './shell.js';
 import { GATED_WHILE_DIALOG, getPolicy, physicalInputRequired } from './policy.js';
 
 export const APPROVAL_SCRIPT = path.join(ROOT, 'approval.ps1');
@@ -39,6 +39,8 @@ export const gate = {
   lastFilter: null,
   /** Number of dialogs shown since start — useful in the startup audit record. */
   shown: 0,
+  /** Dialogs currently open. The lock holds until this reaches zero. */
+  open: 0,
 };
 
 export function gateActive() {
@@ -79,11 +81,48 @@ export function blockedWhileApprovalPending(name) {
 /* ---------------------------------------------------- per-session "remember" */
 
 const sessionApprovals = new Set();
-export const approvalKey = (name, target) => `${name}|${target?.process ?? ''}|${target?.title ?? ''}`;
-export const isSessionApproved = (name, target) => sessionApprovals.has(approvalKey(name, target));
-export const rememberSession = (name, target) => sessionApprovals.add(approvalKey(name, target));
+
+/**
+ * Key for "remember this target for this session".
+ *
+ * It carries the action's own identity, not just the window: remembering a
+ * `click_element(name: "Send")` must not pre-approve a later
+ * `click_element(name: "Delete")` in the same window.
+ */
+export const approvalKey = (name, target, args) => {
+  const base = `${name}|${target?.process ?? ''}|${target?.title ?? ''}`;
+  if (name === 'click_element') {
+    return `${base}|${args?.name ?? ''}|${args?.automation_id ?? ''}|${args?.index ?? 0}`;
+  }
+  if (typeof args?.x === 'number' && typeof args?.y === 'number') return `${base}|${args.x},${args.y}`;
+  return base;
+};
+export const isSessionApproved = (name, target, args) => sessionApprovals.has(approvalKey(name, target, args));
+export const rememberSession = (name, target, args) => sessionApprovals.add(approvalKey(name, target, args));
 export function _resetSessionApprovals() {
   sessionApprovals.clear();
+}
+
+/** Refusal for an approval-requiring call that arrived while a dialog is open. */
+export function approvalBusy(name) {
+  return {
+    isError: true,
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            refused_by_approval_gate: true,
+            reason: 'another approval dialog is already open — only one is shown at a time',
+            why: 'the gate lock must not lift while any dialog is still unanswered',
+            action: name,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
 }
 
 /* --------------------------------------------------------------- the dialog */
@@ -103,7 +142,11 @@ function spawnApproval(shell, params, timeoutMs) {
       // windowsHide MUST be false: it maps to STARTUPINFO.wShowWindow = SW_HIDE,
       // which hides the dialog itself (the script still runs and times out, so
       // the failure looks like "user never answered").
-      ps = spawn(shell, psFileArgs(APPROVAL_SCRIPT, params), { windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      ps = spawn(shell, psFileArgs(APPROVAL_SCRIPT, params), {
+        windowsHide: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: childEnv(),
+      });
     } catch {
       return resolve(3);
     }
@@ -132,9 +175,17 @@ function spawnApproval(shell, params, timeoutMs) {
  * Show the dialog and wait for a real decision. Sets/clears the gate lock, so
  * every path out of here (including a throw) re-opens input tools.
  *
- * @returns {Promise<number>} 0 allow · 1 deny · 2 timeout · 3 unavailable
+ * Only one dialog is shown at a time: a second approval-requiring call that gets
+ * this far (it passed the early gate checks before the first dialog opened) is
+ * refused with code 5 instead of stacking a second dialog. Stacking was a real
+ * hole — as soon as either dialog closed, the lock lifted while the other was
+ * still on screen.
+ *
+ * @returns {Promise<number>} 0 allow · 1 deny · 2 timeout · 3 unavailable · 4 allow+remember · 5 busy
  */
 export async function requestApproval(name, args, check, target, { describeTarget, describeArgs }) {
+  if (gate.open > 0) return 5;
+
   const timeoutMs = getPolicy().approval?.timeout_ms ?? 30000;
   const params = [
     '-Action',
@@ -151,6 +202,7 @@ export async function requestApproval(name, args, check, target, { describeTarge
     physicalInputRequired() ? '1' : '0',
   ];
 
+  gate.open++;
   gate.active = true;
   gate.action = name;
   gate.target = describeTarget(target);
@@ -161,18 +213,16 @@ export async function requestApproval(name, args, check, target, { describeTarge
   try {
     for (const shell of SHELL_CANDIDATES) {
       const code = await spawnApproval(shell, params, timeoutMs);
-      if (code === 4) {
-        // allow + remember for this session
-        rememberSession(name, target);
-        return 0;
-      }
-      if (code !== 3) return code; // 0 allow / 1 deny / 2 timeout
+      if (code !== 3) return code; // 0 allow / 1 deny / 2 timeout / 4 allow + remember
     }
     return 3; // every shell failed to start
   } finally {
-    gate.active = false;
-    gate.action = null;
-    gate.target = null;
+    gate.open = Math.max(0, gate.open - 1);
+    gate.active = gate.open > 0; // the lock lifts only when the last dialog is answered
+    if (!gate.active) {
+      gate.action = null;
+      gate.target = null;
+    }
   }
 }
 

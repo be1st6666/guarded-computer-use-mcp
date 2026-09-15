@@ -198,11 +198,18 @@ test('verifyFile detects an appended record forged with a made-up prev/hash', ()
     const v = verifyFile(file);
     assert.equal(v.ok, false);
     assert.equal(v.records, 3);
-    assert.equal(v.problems.length, 2);
+    // The forged record trips the hash check and the chain link; the chain head
+    // (written by the real records) then notices that the tail it recorded is
+    // gone, so the count is not pinned here — the reasons are.
+    const whys = v.problems.map((p) => p.why);
     assert.equal(v.problems[0].line, 3);
     assert.equal(v.problems[0].why, 'hash mismatch (record edited)');
     assert.equal(v.problems[1].line, 3);
     assert.match(v.problems[1].why, /broken link/);
+    assert.ok(
+      whys.some((w) => /chain head/.test(w)),
+      `expected a chain-head problem, got: ${JSON.stringify(whys)}`,
+    );
   } finally { removeDir(dir); }
 });
 

@@ -7,10 +7,72 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 ## [0.2.0] — unreleased
 
 Hardening release: two real bypasses fixed, the guard switches are signed, and
-the audit log is redacted and hash-chained.
+the audit log is redacted and hash-chained. A second pass followed an adversarial
+review of the first one — those findings are marked **[review]** below, because
+several of them were holes in the fixes themselves rather than in the original
+code.
 
 ### Security
 
+- **[review] `batch` did not re-check the gate after its own awaits.** The step
+  loop checked the lock before resolving the step's target, but resolving can
+  take hundreds of milliseconds (UIA lookup) and a parallel call can open the
+  dialog inside that window — after which the step still ran, i.e. a batch step
+  could answer the dialog it was racing. The check now runs again after every
+  await and immediately before the handler.
+- **[review] `confirm: true` was a model-controlled master key.** It silenced the
+  destructive-pattern checks *and* the new fail-closed check, so
+  `key("alt+f4", confirm: true)` needed no human at all. `confirm` is now honoured
+  only while the approval gate is switched off (where it is the operator's own
+  decision); with the gate on, the dialog is the only way through.
+- **[review] One dialog at a time.** Two approval-requiring calls could both pass
+  the early checks before either dialog opened, then clear the lock when the
+  first one closed while the second was still on screen — which re-opened the
+  original parallel-call hole. The lock is now a counter, and a second dialog is
+  refused outright (`refused_by_approval_gate`, "only one is shown at a time").
+- **[review] The dialog now requires a *physical* event.** Ignoring injected
+  input was not enough: any same-user process could `PostMessage(BM_CLICK)` to the
+  Allow button (or post `WM_SYSKEYDOWN` Alt+A to the form) and the Click handler
+  would fire with no input event to inspect. The allow decision is now taken from
+  the low-level hooks themselves — a physical Alt+A or a physical click inside the
+  button — and the Click handler refuses anything else (this also covers a UIA
+  `InvokePattern`, which fires the same handler). Regression-tested with a real
+  `BM_CLICK` against the live dialog.
+- **[review] A deleted or stripped audit log is detected.** The chain could not
+  see its own tail being removed — truncation, whole-file deletion or stripping
+  the `hash` fields all verified OK. `record()` now also writes a chain head
+  (`audit.head.json`), `verify` compares the file against it, and a record that
+  lost its hash *after* a chained record is treated as tampering (records written
+  before chaining existed, i.e. before any chained record, are still `legacy` so
+  an existing log can be upgraded).
+- **[review] Guard markers can no longer be replayed.** A captured marker was a
+  bearer token with no expiry. Markers now carry a per-switch counter, and the
+  highest accepted counter is remembered, so restoring an old marker is refused
+  and reported as tampering.
+- **[review] Launching a shell or a LOLBin is refused.** `launch_app` was
+  checked against the *foreground* window, never against the program it was about
+  to start, so `launch_app({target: "cmd.exe", arguments: "/c ..."})` passed with
+  no dialog. The target is now checked (basename, case-insensitive) against
+  `deny_launch_targets` and the process deny list.
+- **[review] Actions are checked against what they actually touch.** A `click` or
+  `scroll` with no coordinates acts at the cursor but was checked against the
+  *foreground* window; a `click` with `x` but no `y` landed at `(x, 0)` because
+  the host casts a missing `y` to zero; and a `drag` was only checked where it
+  started. Cursor-based actions now resolve the real cursor position, a
+  half-specified coordinate pair is rejected, and a drag is checked at both ends.
+- **[review] The guard secret no longer leaks to child processes.**
+  `COMPUTER_USE_GUARD_SECRET` was inherited by the host shell, the OCR worker and
+  the approval dialog — and by anything `launch_app` started, which made
+  `cmd /c set > file` a way to read it and then forge markers. Children now get a
+  copy of the environment without it.
+- **[review] Blocked actions are no longer logged as successful.** A
+  `pending_safety_check` (or any refusal) used to be written with `ok: true`; the
+  audit log now records whether the action actually ran, and names the reason.
+- **[review] "Remember for this session" is keyed by the action.** Remembering
+  `click_element(name: "Send")` used to pre-approve any later click in the same
+  window, including one whose query never matched and fell back to the foreground
+  window. The key now includes the element/coordinate identity, and a target
+  resolved from the foreground-window fallback is never remembered.
 - **Fixed: a parallel tool call could answer its own approval dialog.** Tool
   handlers are async, so while the dialog blocked one call, a second call issued
   in parallel could run `key("alt+a")`, `click(x, y)` on Allow, or
