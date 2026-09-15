@@ -146,10 +146,12 @@ function sign(name, off, at, n) {
 
 /* ---------------------------------------------------- tamper bookkeeping */
 
-const tamperEvents = [];
+const tamperEvents = []; // append-only history, for the audit log
 const reported = new Set();
+const live = new Map(); // switch -> reason, only while the problem is still there
 
 function noteTamper(name, reason, detail) {
+  live.set(name, reason);
   const key = `${name}|${reason}`;
   if (!reported.has(key)) {
     reported.add(key);
@@ -158,17 +160,25 @@ function noteTamper(name, reason, detail) {
   }
 }
 
-/** All tamper events seen so far (newest last). */
+/** All tamper events seen so far (newest last). History, not current state. */
 export function tamperEvents_() {
   return tamperEvents.slice();
 }
 
-/** One-line warning to prepend to tool results, or null. */
+/**
+ * One-line warning to prepend to tool results, or null.
+ *
+ * Only *unresolved* tampering is reported. The history stays in the audit log,
+ * but a warning that outlives the bad marker would tax every later call for the
+ * rest of the process — and turning that into "plant a file, make the agent's
+ * context permanently more expensive" is exactly the kind of thing this module
+ * exists to prevent.
+ */
 export function tamperWarning() {
-  if (!tamperEvents.length) return null;
-  const names = [...new Set(tamperEvents.map((e) => e.name))].join(', ');
+  if (!live.size) return null;
+  const names = [...live.keys()].join(', ');
   return (
-    `WARNING: ${tamperEvents.length} guard marker(s) failed signature verification (${names}). ` +
+    `WARNING: ${live.size} guard marker(s) failed signature verification (${names}). ` +
     'The protection layers stay ON; the marker was ignored. See audit.jsonl (op=guard_tamper).'
   );
 }
@@ -176,6 +186,7 @@ export function tamperWarning() {
 export function _resetTamperState() {
   tamperEvents.length = 0;
   reported.clear();
+  live.clear();
 }
 
 /* ------------------------------------------------------------- reading */
@@ -196,6 +207,7 @@ export function readSwitch(name) {
       st[name] = { ...st[name], live: false };
       writeState(st);
     }
+    live.delete(name); // a bad marker that has been removed is no longer a warning
     return base;
   }
 
@@ -271,6 +283,7 @@ export function readSwitch(name) {
   }
   state[name] = { n: doc.n, at: doc.at, sig: doc.sig, live: true };
   writeState(state);
+  live.delete(name); // the switch reads clean again, so drop any warning for it
 
   return { ...base, exists: true, off: doc.off === true, signed: true, at: doc.at, reason: null };
 }
