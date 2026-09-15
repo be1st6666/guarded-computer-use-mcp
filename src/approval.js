@@ -12,14 +12,19 @@
  *   then answer the prompt. The README's claim that "only a real human click
  *   can proceed" was false as written.
  *
- * Two independent defences now:
- *   1. `gate.active` — while a dialog is open, every tool that injects input or
- *      changes the foreground is refused (see GATED_WHILE_DIALOG).
- *   2. The dialog itself ignores keystrokes and clicks that carry the Windows
- *      LLKHF_INJECTED / LLMHF_INJECTED flag (approval.ps1 -BlockInjected), so
- *      SendInput from *any* tool — another MCP server, a script, this one —
- *      cannot answer it. That check cannot tell a physical key from a synthetic
- *      one for UIAutomation invocations, which is documented in SECURITY.md.
+ * Three independent defences now:
+ *   1. `gate.active` / `gate.open` — while a dialog is open, every tool that
+ *      injects input or changes the foreground is refused (see
+ *      GATED_WHILE_DIALOG). The caller re-checks it after every await, including
+ *      once per batch step. Only one dialog is shown at a time, so the lock
+ *      cannot lift while a second prompt is still on screen.
+ *   2. The allow decision is taken from approval.ps1's low-level input hooks,
+ *      which only fire for *physical* input (approval.ps1 -BlockInjected). The
+ *      WinForms button refuses to act on anything else, so `SendInput` from any
+ *      tool, a posted BM_CLICK / WM_KEYDOWN, and a UIAutomation InvokePattern are
+ *      all ignored — and counted on the dialog.
+ *   3. Every refusal is audited, so an attempt to answer the dialog leaves a
+ *      record rather than passing silently.
  */
 import { spawn } from 'node:child_process';
 import path from 'node:path';

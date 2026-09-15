@@ -403,9 +403,11 @@ Design notes:
 
 - A mis-click in an app that is *not* on a deny list. If the model clicks the
   wrong thing in Notepad, nothing stops it.
-- A **second** desktop-control server (or any local process) reaching the dialog
-  through UIAutomation `InvokePattern`, which does not go through the input
-  hooks. Run one at a time, or read [SECURITY.md](SECURITY.md) §4.1.
+- A **second** desktop-control server, or any other local process, that can write
+  files as you: it can replace `guard.key`, roll back `guard.state.json` /
+  `audit.head.json`, widen `policy.json`, or run `host.ps1` directly. It *cannot*
+  answer the dialog — that needs a physical event — but it does not have to.
+  See [SECURITY.md](SECURITY.md) §4.1.
 - Same-user file access: `policy.json`, `guard.key` and `host.ps1` are all
   reachable by anything running as you.
 - **It is not a sandbox.** The agent runs with your user's privileges on your

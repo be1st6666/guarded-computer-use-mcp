@@ -17,7 +17,7 @@ agent safe, and there is no configuration that does.
 |---|---|---|
 | The model, acting on its own initiative or on instructions injected into a page/PDF/chat it read | **Partly** | deny lists (hard refusal), approval dialog for dangerous patterns and always-ask targets, rate limit, `pending_safety_check` |
 | The model issuing *parallel* tool calls to answer its own approval dialog | **Yes** (fixed 2026-09-15) | server-side gate lock + physical-input filter in the dialog |
-| Another local process / MCP server injecting input to answer the dialog | **Partly** | the dialog ignores any event carrying the Windows `LLKHF_INJECTED` / `LLMHF_INJECTED` flag, so `SendInput` from anywhere is discarded. A UIAutomation `InvokePattern` is *not* covered — see §4.1 |
+| Another local process / MCP server trying to answer the dialog | **Yes** | the dialog discards any event carrying the Windows `LLKHF_INJECTED` / `LLMHF_INJECTED` flag, and only allows on a *physical* Alt+A or a physical click inside the button — so `SendInput`, a posted `BM_CLICK` / `WM_KEYDOWN`, and a UIAutomation `InvokePattern` all fail (§2.2, §3.3) |
 | A same-user process that can write files in this directory | **No** | markers are signed, so a forged marker is ignored and reported, but `guard.key` is readable by that same user. This is a speed bump plus a tripwire, not a boundary |
 | An administrator, or anything running as SYSTEM | **No** | it can do whatever it likes to the files, the process, and the desktop |
 | Your own misclicks | **No** | the dialog asks; it does not know what you meant |
