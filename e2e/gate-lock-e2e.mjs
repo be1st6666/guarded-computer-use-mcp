@@ -121,9 +121,13 @@ try {
 
   // 2. Answer it from "the model" while it is still waiting.
   const started = Date.now();
-  const [keyRes, clickRes] = await Promise.all([
+  const [keyRes, clickRes, batchRes] = await Promise.all([
     callTool('key', { combo: 'alt+a' }),
     callTool('click', { x: 10, y: 10 }),
+    // `batch` is the one path that calls the tool handlers directly instead of
+    // going through the checked wrapper, so it gets its own attempt: the wrapper
+    // refuses the batch, and the step loop re-checks the lock after every await.
+    callTool('batch', { steps: [{ op: 'click', args: { x: 10, y: 10 } }, { op: 'screenshot', args: {} }] }),
   ]);
   const elapsed = Date.now() - started;
 
@@ -133,8 +137,15 @@ try {
     'key("alt+a") is refused while the dialog waits', JSON.stringify(keyPayload).slice(0, 120));
   check(clickPayload.refused_by_approval_gate === true,
     'click is refused while the dialog waits', JSON.stringify(clickPayload).slice(0, 120));
+  const batchText = (batchRes?.result?.content ?? []).map((c) => c.text ?? '').join('\n');
+  const batchPayload = payloadOf(batchRes);
+  check(
+    batchPayload.refused_by_approval_gate === true || /BLOCKED — an approval dialog/.test(batchText),
+    'batch is refused while the dialog waits',
+    (batchPayload.refused_by_approval_gate ? 'refused by the wrapper' : batchText.split('\n')[0]).slice(0, 120),
+  );
   check(elapsed < TIMEOUT_MS,
-    'both refusals came back before the dialog could time out', `${elapsed} ms`);
+    'all three refusals came back before the dialog could time out', `${elapsed} ms`);
   check(/injected-input=on/.test(stderr),
     'the dialog really opened with its physical-input filter', (stderr.match(/injected-input=(\w+)/) || [])[1] ?? 'no status line');
 
