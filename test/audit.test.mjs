@@ -1,8 +1,8 @@
 /**
  * Unit tests for src/audit.js — redaction and the tamper-evident hash chain.
  *
- * `configure({file})` always points at a temp path, so the live
- * D:\dsh-workspace\computer-use-mcp\audit.jsonl is never written.
+ * `configure({file})` always points at a temp path, so the repository's own
+ * audit.jsonl is never written.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

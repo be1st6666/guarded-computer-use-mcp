@@ -2,10 +2,10 @@
  * Unit tests for src/policy.js — deny lists, allow list, rate limit and the
  * "does this need a human?" decision surface.
  *
- * `configurePolicyPath()` points every test at a temp policy.json; the real
- * D:\dsh-workspace\computer-use-mcp\policy.json is only ever read (in `before`,
- * to restore the process afterwards). The rate limiter is a module-level array,
- * so each test calls `_resetRateLimit()`.
+ * `configurePolicyPath()` points every test at a temp policy.json; the project's
+ * own policy.json is only ever read (in `before`, to restore the process
+ * afterwards). The rate limiter is a module-level array, so each test calls
+ * `_resetRateLimit()`.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
