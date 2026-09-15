@@ -4,9 +4,12 @@ node_modules/
 
 # runtime state — never commit these
 audit.jsonl
+audit-*.jsonl
+guard.key
 .approval-off
 .guard-off
 .audit-off
+.physical-off
 policy.local.json
 
 # test / debug scratch files

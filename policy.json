@@ -4,7 +4,11 @@
     "All lists are substring matches, case-insensitive. Edit and restart the MCP server.",
     "  deny_processes / deny_window_titles  -> hard refusal, no override possible",
     "  approval_processes / approval_window_titles -> every action needs a human click",
-    "  allow_processes (non-empty) -> only these processes may be touched at all"
+    "  allow_processes (non-empty) -> only these processes may be touched at all",
+    "Protection switches are NOT here: they live in signed marker files written by",
+    "guard-panel.cmd (.approval-off / .guard-off / .audit-off / .physical-off).",
+    "An unsigned or hand-edited marker is ignored and reported as guard_tamper.",
+    "'audit' may be true/false or an object: { enabled, redact, max_bytes }."
   ],
 
   "_deny_comment": "Hard refusal. Password managers, crypto wallets, and tools that can destroy the system.",
@@ -59,10 +63,13 @@
 
   "max_actions_per_minute": 120,
 
+  "_audit_comment": "true/false, or { enabled, redact (default true), max_bytes (rotate past this size) }.",
   "audit": true,
 
+  "_approval_comment2": "require_physical_input: the dialog ignores keystrokes/clicks carrying the Windows injected flag, so SendInput from any automation tool cannot answer it. Falls back with a warning if the hook cannot be installed; .physical-off disables it.",
   "approval": {
     "enabled": true,
-    "timeout_ms": 30000
+    "timeout_ms": 30000,
+    "require_physical_input": true
   }
 }
