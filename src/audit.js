@@ -338,15 +338,16 @@ export function verifyFile(file) {
     .filter((l) => l.trim());
   let expectedPrev = null;
   let lastSeq = null;
-  let count = 0; // chained records
+  let count = 0; // chained records in the current segment
+  let chainedTotal = 0; // chained records in the whole file
   let legacy = 0; // pre-chain records
+  let segments = 1; // chain restarts (a log written by an old and a new build)
 
-  // Records written before hash chaining existed sit at the START of the file;
-  // anything hashless AFTER a chained record is a stripped hash, not history.
-  // (A file whose hashes were all stripped is caught by the chain-head check
-  // below, which still remembers how far the segment got.)
-  let seenChained = false;
-
+  // A record from a pre-chaining build has no `seq`; a chained record keeps its
+  // `seq` even if its `hash` is deleted. That is the only reliable way to tell
+  // the two apart — and it matters, because a log written by both an old and a
+  // new process has legitimate hashless lines scattered through it (a live
+  // session upgrading in place looks exactly like that).
   lines.forEach((line, i) => {
     let doc;
     try {
@@ -357,15 +358,14 @@ export function verifyFile(file) {
     }
 
     if (typeof doc.hash !== 'string' || doc.hash.length !== 64) {
-      if (seenChained) {
-        problems.push({ line: i + 1, why: 'record without a hash after a chained record (hash stripped)' });
+      if (typeof doc.seq === 'number') {
+        problems.push({ line: i + 1, why: 'a chained record lost its hash (hash stripped)' });
         return;
       }
       legacy++;
       problems.push({ line: i + 1, why: 'legacy record (written before hash chaining)', legacy: true });
       return;
     }
-    seenChained = true;
 
     const payload = payloadOf(doc);
     const hash = hashOf(doc.prev ?? '', payload);
@@ -374,10 +374,21 @@ export function verifyFile(file) {
     // Chain links are checked between consecutive *chained* records only, so an
     // unparseable or legacy line cannot cascade into false "broken link"
     // reports for every record after it.
-    if (count === 0) {
-      if (doc.prev !== GENESIS)
-        problems.push({ line: i + 1, why: `segment does not start at genesis (prev=${doc.prev})` });
-    } else if (doc.prev !== expectedPrev) {
+    //
+    // A record whose prev is `genesis` after a segment has already started is a
+    // new segment, not a break: that is what happens when a log is written by an
+    // old and a new build in turn (the new one reads a hashless tail and starts
+    // again). Deleting records does not produce this — the writer continues from
+    // whatever tail it finds, which is exactly what the chain-head check below
+    // catches.
+    if (doc.prev === GENESIS && count > 0) {
+      segments++;
+      expectedPrev = null;
+      lastSeq = null;
+      count = 0;
+    } else if (count === 0 && doc.prev !== GENESIS) {
+      problems.push({ line: i + 1, why: `segment does not start at genesis (prev=${String(doc.prev).slice(0, 12)}…)` });
+    } else if (count > 0 && doc.prev !== expectedPrev) {
       problems.push({
         line: i + 1,
         why: `broken link: prev=${String(doc.prev).slice(0, 12)}… expected ${String(expectedPrev).slice(0, 12)}…`,
@@ -389,23 +400,24 @@ export function verifyFile(file) {
     expectedPrev = doc.hash;
     lastSeq = typeof doc.seq === 'number' ? doc.seq : null;
     count++;
+    chainedTotal++;
   });
 
   // The head is the only thing that can notice a deleted tail or a wholesale
   // strip: a truncated or hashless log is still a valid file on its own.
   let headNote = null;
   if (headHere) {
-    if (count === 0 && (headHere.seq ?? 0) > 0) {
+    if (chainedTotal === 0 && (headHere.seq ?? 0) > 0) {
       problems.push({
         line: 0,
         why: `no chained record is left, but the chain head recorded seq ${headHere.seq} (hashes stripped or log replaced)`,
       });
-    } else if (count > 0 && typeof lastSeq === 'number' && lastSeq < headHere.seq) {
+    } else if (chainedTotal > 0 && typeof lastSeq === 'number' && lastSeq < headHere.seq) {
       problems.push({
         line: 0,
         why: `records deleted: the chain head recorded seq ${headHere.seq}, this file ends at ${lastSeq}`,
       });
-    } else if (count > 0 && expectedPrev !== headHere.hash) {
+    } else if (chainedTotal > 0 && expectedPrev !== headHere.hash) {
       problems.push({ line: 0, why: 'the last record does not match the chain head (tail rewritten)' });
     } else {
       headNote = `matches the chain head (seq ${headHere.seq})`;
@@ -413,9 +425,19 @@ export function verifyFile(file) {
   } else {
     headNote = 'no chain head recorded — a deleted tail cannot be detected';
   }
+  if (segments > 1) headNote = `${headNote}; ${segments} chain segments (a log written by two versions)`;
 
   const hard = problems.filter((p) => !p.legacy);
-  return { file, records: count, legacy, ok: hard.length === 0, problems, head: headHere, headNote };
+  return {
+    file,
+    records: chainedTotal,
+    legacy,
+    segments,
+    ok: hard.length === 0,
+    problems,
+    head: headHere,
+    headNote,
+  };
 }
 
 /** Verify audit.jsonl and every rotated segment next to it. */

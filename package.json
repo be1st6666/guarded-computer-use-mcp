@@ -50,7 +50,7 @@
     "test:lock": "node e2e/gate-lock-e2e.mjs",
     "audit:verify": "node src/audit.js verify",
     "guard": "node src/guard.js list",
-    "verify": "npm run lint && npm run test:unit && npm run test:policy && npm run test:smoke && npm run audit:verify"
+    "verify": "npm run lint && npm run format:check && npm run test:unit && npm run test:policy && npm run test:smoke && npm run audit:verify"
   },
   "keywords": [
     "mcp",

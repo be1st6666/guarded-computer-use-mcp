@@ -124,3 +124,43 @@ test('an unchanged log still verifies after the head is rewritten by rotation', 
   assert.equal(current.ok, true, JSON.stringify(current.problems));
   assert.ok(current.records > 0);
 });
+
+/*
+ * A log written by an old and a new build in turn has hashless lines scattered
+ * through it, and the new build restarts its chain from genesis each time it
+ * finds such a tail. Both are legitimate: neither may be reported as tampering,
+ * and the tamper checks must still work on top of them.
+ */
+test('a log written by two versions verifies: legacy lines anywhere, several chain segments', () => {
+  rmSync(file, { force: true });
+  rmSync(head, { force: true });
+  configure({ file, maxBytes: 0 });
+  record({ op: 'click', args: { a: 1 } });
+  record({ op: 'click', args: { a: 2 } });
+
+  // The old build appends, in its own format (no seq / prev / hash).
+  const legacyLine = JSON.stringify({ t: '2026-01-01T00:00:00.000Z', op: 'key', args: { combo: 'x' }, ok: true });
+  writeFileSync(file, readFileSync(file, 'utf8') + legacyLine + '\n');
+
+  // A new process reads that tail and starts a fresh segment.
+  configure({ file, maxBytes: 0 });
+  record({ op: 'key', args: { b: 1 } });
+  record({ op: 'key', args: { b: 2 } });
+
+  const v = verifyFile(file);
+  assert.equal(v.ok, true, `expected OK, got ${JSON.stringify(v.problems)}`);
+  assert.equal(v.legacy, 1);
+  assert.equal(v.records, 4);
+  assert.equal(v.segments, 2);
+  assert.match(v.headNote, /2 chain segments/);
+
+  // The checks that matter still fire on that same log.
+  const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  const stripped = JSON.parse(lines[0]);
+  delete stripped.hash;
+  lines[0] = JSON.stringify(stripped);
+  writeFileSync(file, lines.join('\n') + '\n');
+  const after = verifyFile(file);
+  assert.equal(after.ok, false);
+  assert.ok(after.problems.some((p) => /lost its hash/.test(p.why)));
+});
