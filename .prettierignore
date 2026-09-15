@@ -1,0 +1,10 @@
+node_modules/
+package-lock.json
+docs/
+*.ps1
+*.cmd
+*.md
+audit*.jsonl
+test/
+# Hand-grouped data file: the blank lines separate the list families on purpose.
+policy.json

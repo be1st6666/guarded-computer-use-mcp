@@ -27,9 +27,16 @@ child.stdout.on('data', (d) => {
     buf = buf.slice(i + 1);
     if (!line) continue;
     let msg;
-    try { msg = JSON.parse(line); } catch { continue; }
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      continue;
+    }
     const w = waiters.get(msg.id);
-    if (w) { waiters.delete(msg.id); w(msg); }
+    if (w) {
+      waiters.delete(msg.id);
+      w(msg);
+    }
   }
 });
 
@@ -38,8 +45,14 @@ function rpc(method, params) {
   const myId = ++id;
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: myId, method, params }) + '\n');
   return new Promise((res, rej) => {
-    const t = setTimeout(() => { waiters.delete(myId); rej(new Error(`timeout: ${method}`)); }, 120000);
-    waiters.set(myId, (m) => { clearTimeout(t); m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result); });
+    const t = setTimeout(() => {
+      waiters.delete(myId);
+      rej(new Error(`timeout: ${method}`));
+    }, 120000);
+    waiters.set(myId, (m) => {
+      clearTimeout(t);
+      m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result);
+    });
   });
 }
 const notify = (method, params) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
@@ -48,7 +61,9 @@ async function call(name, args = {}) {
   const t0 = Date.now();
   const r = await rpc('tools/call', { name, arguments: args });
   const ms = Date.now() - t0;
-  const blocks = (r.content || []).map((c) => (c.type === 'image' ? `[image ${Math.round(c.data.length / 1024)}KB]` : c.text));
+  const blocks = (r.content || []).map((c) =>
+    c.type === 'image' ? `[image ${Math.round(c.data.length / 1024)}KB]` : c.text,
+  );
   return { ms, isError: !!r.isError, text: blocks.join(' | ') };
 }
 
@@ -87,7 +102,7 @@ async function main() {
     await call('mouse_move', { x: before.x, y: before.y });
     console.log(
       `✓ ${'mouse_move'.padEnd(22)} ${String('').padStart(6)}      ${before.x},${before.y} -> ${after.x},${after.y} -> restored  ` +
-      `${after.x === before.x + 3 && after.y === before.y + 3 ? 'OK' : 'MISMATCH'}`
+        `${after.x === before.x + 3 && after.y === before.y + 3 ? 'OK' : 'MISMATCH'}`,
     );
     line('scroll(1 up)', await call('scroll', { direction: 'up', amount: 1 }));
     line('scroll(1 down)', await call('scroll', { direction: 'down', amount: 1 }));
@@ -110,7 +125,11 @@ async function main() {
       win = arr.find((x) => !before.has(x.handle) && /notepad|记事本/i.test(x.title));
       if (win) break;
     }
-    if (!win) { console.log('✗ notepad window never appeared'); child.kill(); process.exit(1); }
+    if (!win) {
+      console.log('✗ notepad window never appeared');
+      child.kill();
+      process.exit(1);
+    }
     console.log(`   new window: "${win.title}" pid=${win.pid} rect=${JSON.stringify(win.rect)}`);
 
     line('activate_window(pid)', await call('activate_window', { pid: win.pid }));
@@ -129,16 +148,25 @@ async function main() {
     await call('wait', { ms: 250 });
     const cb = JSON.parse((await call('clipboard_read')).text).text;
     const ok = cb === payload;
-    console.log(`${ok ? '✓' : '✗'} ${'roundtrip verify'.padEnd(22)} ${String('').padStart(6)}      ` +
-      `got="${cb}"`);
+    console.log(`${ok ? '✓' : '✗'} ${'roundtrip verify'.padEnd(22)} ${String('').padStart(6)}      ` + `got="${cb}"`);
     if (!ok) console.log(`   expected="${payload}"`);
 
     line('key(ctrl+z)', await call('key', { combo: 'ctrl+z' }));
-    line('drag(titlebar)', await call('drag', {
-      x1: cx, y1: aw.rect[1] + 14, x2: cx + 60, y2: aw.rect[1] + 14,
-    }));
+    line(
+      'drag(titlebar)',
+      await call('drag', {
+        x1: cx,
+        y1: aw.rect[1] + 14,
+        x2: cx + 60,
+        y2: aw.rect[1] + 14,
+      }),
+    );
 
-    try { execSync(`taskkill /PID ${win.pid} /F`, { stdio: 'ignore' }); } catch { /* already gone */ }
+    try {
+      execSync(`taskkill /PID ${win.pid} /F`, { stdio: 'ignore' });
+    } catch {
+      /* already gone */
+    }
     console.log('   notepad closed');
   }
 
@@ -175,7 +203,9 @@ async function main() {
       const parsed = JSON.parse(t.text);
       console.log(`nodes=${parsed.nodes}`);
       console.log(parsed.tree.split('\n').slice(0, 20).join('\n'));
-    } catch { console.log(t.text.slice(0, 700)); }
+    } catch {
+      console.log(t.text.slice(0, 700));
+    }
 
     const f = await call('find_elements', { window: win, control_type: 'button', max: 8 });
     console.log(`\n--- find_elements(buttons) ${f.ms}ms ---`);
@@ -185,7 +215,9 @@ async function main() {
       for (const e of parsed.elements) {
         console.log(`  ${e.controlType} "${e.name}" center=${JSON.stringify(e.center)} enabled=${e.enabled}`);
       }
-    } catch { console.log(f.text.slice(0, 600)); }
+    } catch {
+      console.log(f.text.slice(0, 600));
+    }
   }
 
   if (phase === 'newtools') {
@@ -209,10 +241,14 @@ async function main() {
     console.log(`\n--- ocr(计算器区域) ${ocr.ms}ms ---`);
     try {
       const o = JSON.parse(ocr.text);
-      console.log(`  region=${JSON.stringify(o.region)} capture=${o.ms.capture}ms ocr=${o.ms.ocr}ms words=${o.totalWords}`);
+      console.log(
+        `  region=${JSON.stringify(o.region)} capture=${o.ms.capture}ms ocr=${o.ms.ocr}ms words=${o.totalWords}`,
+      );
       console.log(`  text: ${String(o.text).replace(/\s+/g, ' ').slice(0, 160)}`);
       for (const w of o.words.slice(0, 8)) console.log(`    "${w.t}" box=${JSON.stringify(w.box)}`);
-    } catch { console.log(ocr.text.slice(0, 400)); }
+    } catch {
+      console.log(ocr.text.slice(0, 400));
+    }
 
     // 4. 用 OCR 的结果直接点一个字 —— 关掉计算器
     const ocr2 = await call('ocr', { x: 400, y: 30, width: 200, height: 200, max_words: 30 });
@@ -224,9 +260,11 @@ async function main() {
         const r = await call('click', { x: cx + cw / 2, y: cy + ch / 2 });
         console.log(`\n--- OCR 定位 "关闭" 并点击 box=${JSON.stringify(close.box)} -> ${r.isError ? 'ERR' : 'ok'}`);
       } else {
-        console.log(`\n--- OCR 没找到关闭按钮（words: ${o.words.map(w=>w.t).join(' ')}）`);
+        console.log(`\n--- OCR 没找到关闭按钮（words: ${o.words.map((w) => w.t).join(' ')}）`);
       }
-    } catch (e) { console.log('  ocr2 failed: ' + e.message); }
+    } catch (e) {
+      console.log('  ocr2 failed: ' + e.message);
+    }
   }
 
   if (phase === 'rapid') {
@@ -239,11 +277,20 @@ async function main() {
     for (const engine of ['windows', 'rapidocr']) {
       const r = await call('ocr', { ...R, engine, max_words: 30 });
       console.log(`\n--- engine=${engine}  ${r.ms}ms ---`);
-      if (r.isError) { console.log('  ERROR: ' + r.text.slice(0, 200)); continue; }
+      if (r.isError) {
+        console.log('  ERROR: ' + r.text.slice(0, 200));
+        continue;
+      }
       const o = JSON.parse(r.text);
       console.log(`  words=${o.totalWords}  ms=${JSON.stringify(o.ms)}`);
       console.log(`  text: ${String(o.text).slice(0, 200)}`);
-      console.log('  boxes: ' + o.words.slice(0, 10).map((w) => `${w.t}@[${w.box.join(',')}]`).join('  '));
+      console.log(
+        '  boxes: ' +
+          o.words
+            .slice(0, 10)
+            .map((w) => `${w.t}@[${w.box.join(',')}]`)
+            .join('  '),
+      );
     }
 
     // 用 RapidOCR 找到的数字按钮点一下，验证 OCR 驱动的点击
@@ -294,4 +341,8 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => { console.error('FATAL', e); child.kill(); process.exit(1); });
+main().catch((e) => {
+  console.error('FATAL', e);
+  child.kill();
+  process.exit(1);
+});

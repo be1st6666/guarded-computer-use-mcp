@@ -49,7 +49,8 @@ console.log('--- 应当命中 ---');
 for (const [list, val, label] of shouldHit) {
   const hit = m(val, policy[list]);
   const good = !!hit;
-  if (good) ok++; else bad++;
+  if (good) ok++;
+  else bad++;
   console.log(`  ${good ? 'PASS' : 'FAIL'}  ${label.padEnd(14)} "${val}"` + (hit ? `  -> "${hit}"` : '  -> MISS'));
 }
 
@@ -57,10 +58,15 @@ console.log('\n--- 不应误伤 ---');
 for (const [list, val, label] of shouldMiss) {
   const hit = m(val, policy[list]);
   const good = !hit;
-  if (good) ok++; else bad++;
-  console.log(`  ${good ? 'PASS' : 'FAIL'}  ${label.padEnd(14)} "${val}"` + (hit ? `  -> false positive "${hit}"` : ''));
+  if (good) ok++;
+  else bad++;
+  console.log(
+    `  ${good ? 'PASS' : 'FAIL'}  ${label.padEnd(14)} "${val}"` + (hit ? `  -> false positive "${hit}"` : ''),
+  );
 }
 
 console.log(`\n${ok} passed, ${bad} failed`);
-console.log(`\n列表规模: deny_processes=${policy.deny_processes.length} deny_titles=${policy.deny_window_titles.length} approval_processes=${policy.approval_processes.length} approval_titles=${policy.approval_window_titles.length}`);
+console.log(
+  `\n列表规模: deny_processes=${policy.deny_processes.length} deny_titles=${policy.deny_window_titles.length} approval_processes=${policy.approval_processes.length} approval_titles=${policy.approval_window_titles.length}`,
+);
 process.exit(bad ? 1 : 0);
