@@ -10,6 +10,7 @@
   "files": [
     "src",
     "test",
+    "e2e",
     "server.js",
     "host.ps1",
     "ocr.ps1",
@@ -43,10 +44,10 @@
     "bench": "node bench.js 5",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "test:unit": "node --test test/*.test.mjs",
+    "test:unit": "node --test test/guard.test.mjs test/audit.test.mjs test/policy.test.mjs test/approval-lock.test.mjs",
     "test:smoke": "node test/smoke.mjs",
-    "test:inject": "node test/approval-inject.mjs",
-    "test:lock": "node test/gate-lock-e2e.mjs",
+    "test:inject": "node e2e/approval-inject.mjs",
+    "test:lock": "node e2e/gate-lock-e2e.mjs",
     "audit:verify": "node src/audit.js verify",
     "guard": "node src/guard.js list",
     "verify": "npm run lint && npm run test:unit && npm run test:policy && npm run test:smoke && npm run audit:verify"

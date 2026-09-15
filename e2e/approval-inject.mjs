@@ -10,7 +10,7 @@
  * input through this server's own host.ps1, exactly like a hostile tool call
  * would. It therefore needs an interactive session — it is skipped when CI=1.
  *
- *   node test/approval-inject.mjs
+ *   node e2e/approval-inject.mjs
  *
  * Pass criteria:
  *   * the dialog reports injected-input=on

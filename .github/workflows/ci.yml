@@ -8,12 +8,14 @@ env:
   CI: '1'
 
 jobs:
+  # Full chain on the Node versions the dev tooling actually supports: ESLint 10
+  # requires ^20.19 || ^22.13 || >=24.
   test:
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: [20.x, 22.x, 24.x]
     steps:
       - uses: actions/checkout@v4
 
@@ -43,5 +45,31 @@ jobs:
       - name: Smoke test (MCP stdio handshake)
         run: npm run test:smoke
 
-      # test:inject is deliberately NOT run here: it drives the approval dialog and
-      # needs an interactive desktop, which a headless CI runner does not have.
+  # The server itself still claims Node >= 18, so keep a runtime-only leg there
+  # (no lint/format: the tooling above does not support 18).
+  node18:
+    runs-on: windows-latest
+    name: runtime on Node 18
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Policy tests
+        run: npm run test:policy
+
+      - name: Smoke test (MCP stdio handshake)
+        run: npm run test:smoke
+
+  # test:inject and test:lock are deliberately NOT run here: they drive the real
+  # approval dialog and need an interactive desktop, which a headless CI runner
+  # does not have. Run them locally: npm run test:inject / npm run test:lock.

@@ -6,5 +6,6 @@ docs/
 *.md
 audit*.jsonl
 test/
+e2e/
 # Hand-grouped data file: the blank lines separate the list families on purpose.
 policy.json

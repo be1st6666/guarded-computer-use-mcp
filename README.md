@@ -508,6 +508,10 @@ node test-client.js newtools  # launch_app, approval gate, OCR-driven click
 (lists, rate limit, approval decision), `approval.js` (dialog + gate lock).
 `server.js` is the MCP wiring and the tool definitions.
 
+`test/` is the headless suite CI runs (unit tests + the MCP smoke test);
+`e2e/` holds the two scripts that drive the real desktop (approval injection and
+the protocol-level gate-lock regression).
+
 `docs/make-*.ps1` regenerate the README figures from a live screen, so the
 screenshots can be kept honest rather than hand-drawn.
 
