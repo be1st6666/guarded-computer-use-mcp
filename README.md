@@ -33,8 +33,21 @@ This one puts a gate in front of the dangerous part:
 
 ![Approval dialog](docs/approval-dialog.png)
 
-The MCP server **blocks** on that dialog and uses its exit code. Only a real
-human action can proceed — the model cannot forge one.
+The MCP server **blocks** on that dialog and uses its exit code. Two independent
+things stop the model from answering its own prompt:
+
+1. **The gate lock** — while a dialog is open, every input-injecting tool is
+   refused (`refused_by_approval_gate`). MCP handlers are async, so without this
+   a *parallel* tool call (`key("alt+a")`, `click(x, y)` on Allow) would answer
+   the dialog. That was a real bypass; it is fixed and covered by
+   `npm run test:inject`.
+2. **The physical-input filter** — the dialog installs low-level keyboard and
+   mouse hooks and discards every event carrying the Windows `injected` flag, so
+   `SendInput` from *any* automation tool cannot press Alt+A or click Allow. It
+   shows how many injections it ignored, and says so if it could not install.
+
+What that still does not cover is UIAutomation `InvokePattern` from a *second*
+desktop-control server — see [SECURITY.md](SECURITY.md) §4.1.
 
 **Built so a stray keystroke cannot approve anything:**
 
@@ -42,7 +55,7 @@ human action can proceed — the model cannot forge one.
 |---|---|
 | `Enter` | **nothing** — deliberately unbound |
 | `Esc` / window close | deny |
-| `Alt+A` / click Allow | allow |
+| `Alt+A` / click Allow | allow (physical input only) |
 | no answer in time | auto-deny (countdown shown) |
 
 The dialog also shows the **actual arguments** being executed
@@ -56,33 +69,44 @@ Exit codes: `0` allow once · `1` deny · `2` timeout · `3` dialog unavailable
 Flip it off any time when you don't want to be interrupted:
 
 ```
-double-click  guard-panel.cmd      # the panel: three independent switches
+double-click  guard-panel.cmd      # the panel: four independent switches
 double-click  toggle-approval.cmd  # quick toggle for the dialog only
 ```
 
-The panel writes a marker file per switch, and the server reads them **on every
+Switches are **HMAC-signed markers**, and the server reads them **on every
 call** — changes apply instantly, no restart:
 
 | Switch | Marker file | Off means |
 |---|---|---|
 | Approval dialog | `.approval-off` | risky actions return `pending_safety_check` instead of asking you |
-| Deny lists | `.guard-off` | the deny lists and rate limit are skipped |
+| Deny lists | `.guard-off` | the deny lists, the allow list and the rate limit are skipped |
 | Audit log | `.audit-off` | nothing is written to `audit.jsonl` |
+| Physical input | `.physical-off` | the dialog accepts injected keystrokes/clicks again |
 
 They are independent: turning off the deny lists does **not** silently turn off
 the dialog.
+
+The markers are signed with `guard.key` (or `COMPUTER_USE_GUARD_SECRET` in the
+launcher's environment). A marker that is unsigned or hand-edited is **ignored** —
+the protection stays on — and the attempt is written to the audit log
+(`op=guard_tamper`) and surfaced in the next tool result. Anything that can write
+files in this directory can still read `guard.key`; see
+[SECURITY.md](SECURITY.md) §4.2 for the honest version of what that means.
 
 ![Guard panel](docs/guard-panel.png)
 
 ---
 
-## Three layers of protection
+## Layers of protection
 
 | Layer | What it does | Can the model bypass it? |
 |---|---|---|
-| **Policy engine** (`policy.json`) | Refuses to touch deny-listed processes / window titles. Optional allow-list. Rate limit. | **No** — hard refusal, no override |
-| **Approval gate** (`approval.ps1`) | Risky action → real dialog → waits for a human | **No** — needs a physical click |
-| **Audit log** (`audit.jsonl`) | Every action + its target process, appended | — (after the fact) |
+| **Policy engine** (`policy.json`) | Refuses to touch deny-listed processes / window titles. Optional allow-list. Rate limit. Applies to every `batch` step too. | Not via `confirm` — hard refusal. Editing `policy.json` widens it |
+| **Approval gate** (`approval.ps1`) | Risky action → real dialog → waits for a human | Not by answering it itself: input tools are locked out while it is open, and injected input is discarded |
+| **Gate lock** (`src/approval.js`) | Refuses input-injecting tools while a dialog is open | No — it is server-side state |
+| **Physical-input filter** | Ignores `SendInput` keystrokes/clicks in the dialog | Not by injection; a *second* UIA-capable server can still invoke Allow |
+| **Signed switches** (`src/guard.js`) | Forged/hand-edited markers are ignored and reported | Cannot be forged without the key; `guard.key` is readable by your user |
+| **Audit log** (`audit.jsonl`) | Every action + its target process, redacted, hash-chained | — (detects edits after the fact: `npm run audit:verify`) |
 
 Target resolution uses **`WindowFromPoint`** — which window a click *actually*
 lands on, not the foreground window:
@@ -134,12 +158,19 @@ else works without it.
 
 ```bash
 npm test              # read-only tools; no side effects, safe to run any time
+npm run test:unit     # unit tests for the policy/guard/audit/approval core
+npm run test:smoke    # MCP handshake + tool schemas, no desktop needed
 npm run test:policy   # the deny/approval lists, 29 samples
-npm run test:typing   # activate_window + multi-line type_text (launches Notepad)
+npm run test:typing   # type_text round-trip in its own temp Notepad window (skips if Notepad is open)
+npm run test:inject   # shows the real dialog and proves injected input cannot answer it
+npm run test:lock     # protocol-level: parallel tool calls cannot answer the dialog
+npm run verify        # everything that does not need an interactive desktop
 ```
 
 `npm test` prints a tick per tool plus its latency. If it lists tools and
 `screenshot` returns an image, the server is wired up correctly.
+`npm run test:inject` and `npm run test:lock` take over your screen for a few
+seconds (they open the real dialog) and must both end with `all checks passed`.
 
 ### Configure your MCP client
 
@@ -346,13 +377,27 @@ Design notes:
   window → refused by policy, no override.
 - A destructive click (`关闭` / `Close` / `Delete` / `Send`) or key chord
   (`alt+f4`, `ctrl+w`, `win+*`, `shift+delete`) → approval dialog.
+- **The model answering its own approval dialog** — a parallel tool call can no
+  longer inject `alt+a` or click Allow: input tools are locked out while the
+  dialog is open, and the dialog discards injected input entirely.
+- **`batch` skipping the deny lists** — every step is now policy-checked and
+  audited individually.
+- **Turning the guards off with a stray file** — switches are signed; a forged or
+  hand-edited marker is ignored and reported as `guard_tamper`.
 - Runaway loops → `max_actions_per_minute`.
-- "What did it actually do?" → `audit.jsonl` with the target process per action.
+- "What did it actually do?" → `audit.jsonl` with the target process per action,
+  sensitive argument values redacted, and a hash chain that makes quiet edits
+  detectable (`npm run audit:verify`).
 
 **What it does not protect against**
 
 - A mis-click in an app that is *not* on a deny list. If the model clicks the
   wrong thing in Notepad, nothing stops it.
+- A **second** desktop-control server (or any local process) reaching the dialog
+  through UIAutomation `InvokePattern`, which does not go through the input
+  hooks. Run one at a time, or read [SECURITY.md](SECURITY.md) §4.1.
+- Same-user file access: `policy.json`, `guard.key` and `host.ps1` are all
+  reachable by anything running as you.
 - **It is not a sandbox.** The agent runs with your user's privileges on your
   real desktop. There is no VM. "Control the real machine" and "full isolation"
   are architecturally mutually exclusive — Codex's sandbox works because it
@@ -429,21 +474,39 @@ from its use.
 - **No continuous vision.** By design; see the event-driven section.
 - **OCR costs ~0.5–2.5 s** depending on whether the warm worker is alive.
 - **`type_text` needs focus** — `activate_window` + `click` first.
+- **One desktop-control server at a time.** The approval dialog's physical-input
+  filter cannot see UIAutomation invocations from another server; that is
+  [SECURITY.md](SECURITY.md) §4.1.
+- **The audit chain is tamper-evident, not tamper-proof.** Whoever can write the
+  file can rewrite the whole chain; it stops quiet edits.
 
 ---
 
 ## Development
 
 ```bash
+npm run verify                # lint + unit + policy + smoke + audit chain check
+npm run test:unit             # unit tests: guard, audit, policy, approval lock
+npm run test:smoke            # MCP handshake + tool schema smoke test (headless-safe)
+npm run test:inject           # real dialog + injected Alt+A / click (needs a desktop)
+npm run test:lock             # protocol-level gate-lock regression (needs a desktop)
 npm test                      # read-only tools, no side effects
 npm run test:uia              # accessibility tree + semantic search
 npm run test:policy           # deny/approval lists, 29 samples, fails on false positives
 npm run test:typing           # activate_window focus + multi-line/tab type_text
 npm run bench                 # latency + token table
+npm run audit:verify          # walk the audit hash chain, report edited/deleted records
+npm run guard                 # print the four protection switches
+node src/guard.js set guard off   # what the panel does under the hood (signed marker)
 node test-client.js policy    # policy + audit behaviour end to end
 node test-client.js rapid     # Windows OCR vs RapidOCR on the same region
 node test-client.js newtools  # launch_app, approval gate, OCR-driven click
 ```
+
+`src/` holds the safety core as separate, unit-testable modules — `guard.js`
+(signed switches), `audit.js` (redaction + hash chain + rotation), `policy.js`
+(lists, rate limit, approval decision), `approval.js` (dialog + gate lock).
+`server.js` is the MCP wiring and the tool definitions.
 
 `docs/make-*.ps1` regenerate the README figures from a live screen, so the
 screenshots can be kept honest rather than hand-drawn.
@@ -462,13 +525,18 @@ both shells honour.
 
 ## Contributing
 
-Issues and PRs welcome. Two rules keep this repo reviewable:
+Issues and PRs welcome. Three rules keep this repo reviewable:
 
 1. **No third-party automation code.** The whole point is that every line that
    touches your machine can be read in one sitting. `host.ps1` is C# + Win32 and
    nothing else.
 2. **Measure, don't claim.** If you change something for speed, put a number in
    the PR — `npm run bench` exists for that.
+3. **A security fix needs a test that fails without it.** `npm run test:inject`
+   and `test/*.test.mjs` are the examples; `npm run verify` must stay green.
+
+Security-relevant behaviour is documented in [SECURITY.md](SECURITY.md) — if you
+change what a guard does, change that file in the same PR.
 
 ## License
 
