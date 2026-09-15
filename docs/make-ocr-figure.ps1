@@ -1,4 +1,4 @@
-# 生成 README 用的示意图：截取计算器数字键盘，把 OCR 识别到的框和置信度画上去。
+﻿# 生成 README 用的示意图：截取计算器数字键盘，把 OCR 识别到的框和置信度画上去。
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class Dp2{[DllImport("user32.dll")]public static extern bool SetProcessDPIAware();}'

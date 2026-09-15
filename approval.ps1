@@ -3,8 +3,7 @@
   Approval dialog for guarded-computer-use-mcp.
 
   Shown when a tool call matches the safety gate. The MCP server blocks on this
-  process and uses its exit code, so only a real human action can allow the
-  action - the model cannot forge one.
+  process and uses its exit code, so a human decision is required.
 
   Exit codes:
     0 = allowed once
@@ -18,16 +17,25 @@
       mouse click. A stray keystroke must never approve a destructive action.
     * Esc and the window close button both deny.
     * The countdown auto-denies.
+    * -BlockInjected 1 installs a low-level keyboard/mouse hook and swallows
+      every event that carries the Windows "injected" flag (LLKHF_INJECTED /
+      LLMHF_INJECTED). SendInput from any automation tool — this MCP server, a
+      sibling MCP server, a script — therefore cannot press Alt+A or click
+      Allow. Only physical input answers the dialog. The number of ignored
+      injections is displayed, so an attempt is visible rather than silent.
+      A UIAutomation InvokePattern does not go through the hook; see
+      SECURITY.md for what that leaves open.
 
   Saved with a UTF-8 BOM so Windows PowerShell 5.1 reads the CJK labels
-  correctly; the English labels are always shown alongside.
+  correctly.
 #>
 param(
     [string]$Action = 'unknown action',
     [string]$Target = '',
     [string]$Detail = '',
     [string]$Reason = '',
-    [int]$TimeoutMs = 30000
+    [int]$TimeoutMs = 30000,
+    [int]$BlockInjected = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,6 +47,108 @@ try {
 } catch {
     exit 3
 }
+
+# ---- injected-input filter --------------------------------------------------
+# Installed before the dialog appears; the hook needs the message loop that
+# ShowDialog is about to run on this same thread.
+$injectedFilter = 'off'
+if ($BlockInjected -eq 1) {
+    $injectedFilter = 'unavailable'
+    try {
+        if (-not ('DshInputGuard' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class DshInputGuard
+{
+    private const int WH_KEYBOARD_LL = 13;
+    private const int WH_MOUSE_LL = 14;
+    private const uint LLKHF_INJECTED = 0x10;
+    private const uint LLMHF_INJECTED = 0x01;
+
+    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode; public uint scanCode; public uint flags; public uint time; public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSLLHOOKSTRUCT
+    {
+        public int ptX; public int ptY; public uint mouseData; public uint flags; public uint time; public IntPtr dwExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+    private static HookProc kbProc;
+    private static HookProc mouseProc;
+    private static IntPtr kbHook = IntPtr.Zero;
+    private static IntPtr mouseHook = IntPtr.Zero;
+
+    public static int Swallowed;
+    public static bool Installed;
+
+    public static bool Install()
+    {
+        kbProc = new HookProc(KbCallback);
+        mouseProc = new HookProc(MouseCallback);
+        IntPtr mod = GetModuleHandle(null);
+        kbHook = SetWindowsHookEx(WH_KEYBOARD_LL, kbProc, mod, 0);
+        mouseHook = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, mod, 0);
+        Installed = (kbHook != IntPtr.Zero) && (mouseHook != IntPtr.Zero);
+        return Installed;
+    }
+
+    public static void Uninstall()
+    {
+        if (kbHook != IntPtr.Zero) { UnhookWindowsHookEx(kbHook); kbHook = IntPtr.Zero; }
+        if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
+        Installed = false;
+    }
+
+    private static IntPtr KbCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0)
+        {
+            KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+            if ((k.flags & LLKHF_INJECTED) != 0) { Swallowed = Swallowed + 1; return (IntPtr)1; }
+        }
+        return CallNextHookEx(kbHook, nCode, wParam, lParam);
+    }
+
+    private static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0)
+        {
+            MSLLHOOKSTRUCT m = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+            if ((m.flags & LLMHF_INJECTED) != 0) { Swallowed = Swallowed + 1; return (IntPtr)1; }
+        }
+        return CallNextHookEx(mouseHook, nCode, wParam, lParam);
+    }
+}
+'@
+        }
+        if ([DshInputGuard]::Install()) { $injectedFilter = 'on' } else { $injectedFilter = 'unavailable' }
+    } catch {
+        $injectedFilter = 'unavailable'
+    }
+}
+
+# Line the server parses to learn whether the filter is really active.
+Write-Output "injected-input=$injectedFilter"
 
 # ---- localization: follow the OS UI language -------------------------------
 $zh = ([System.Globalization.CultureInfo]::CurrentUICulture.Name -like 'zh*')
@@ -60,7 +170,7 @@ $colWarn = [System.Drawing.Color]::FromArgb(190, 40, 40)
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = T 'Approval required - computer-use' '需要确认 - computer-use'
-$form.ClientSize = New-Object System.Drawing.Size(580, 330)
+$form.ClientSize = New-Object System.Drawing.Size(580, 336)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
@@ -105,23 +215,39 @@ $remember.Size = New-Object System.Drawing.Size(520, 24)
 $form.Controls.Add($remember)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = T 'Enter does not approve. Press Esc to deny, Alt+A to allow.' `
-                '回车不会放行；Esc 拒绝，Alt+A 允许。'
+if ($injectedFilter -eq 'on') {
+    $hint.Text = T 'Enter does not approve. Esc denies, Alt+A allows. Synthetic (injected) input is ignored.' `
+                  '回车不会放行；Esc 拒绝，Alt+A 允许。注入的键鼠输入会被忽略。'
+} elseif ($injectedFilter -eq 'unavailable') {
+    $hint.Text = T 'Enter does not approve. Esc denies, Alt+A allows. WARNING: injected-input filter unavailable.' `
+                  '回车不会放行；Esc 拒绝，Alt+A 允许。警告：注入输入过滤不可用。'
+} else {
+    $hint.Text = T 'Enter does not approve. Esc denies, Alt+A allows.' `
+                  '回车不会放行；Esc 拒绝，Alt+A 允许。'
+}
 $hint.Location = New-Object System.Drawing.Point(20, 224)
 $hint.Size = New-Object System.Drawing.Size(520, 20)
 $hint.ForeColor = $colLabel
 $form.Controls.Add($hint)
 
 $countdown = New-Object System.Windows.Forms.Label
-$countdown.Location = New-Object System.Drawing.Point(20, 254)
+$countdown.Location = New-Object System.Drawing.Point(20, 272)
 $countdown.Size = New-Object System.Drawing.Size(280, 24)
 $countdown.ForeColor = $colWarn
 $countdown.Font = $fontBold
 $form.Controls.Add($countdown)
 
+$injectNote = New-Object System.Windows.Forms.Label
+$injectNote.Location = New-Object System.Drawing.Point(20, 246)
+$injectNote.Size = New-Object System.Drawing.Size(540, 20)
+$injectNote.ForeColor = $colWarn
+$injectNote.Font = $fontBold
+$injectNote.Visible = $false
+$form.Controls.Add($injectNote)
+
 $deny = New-Object System.Windows.Forms.Button
 $deny.Text = T 'Deny (Esc)' '拒绝 (Esc)'
-$deny.Location = New-Object System.Drawing.Point(300, 252)
+$deny.Location = New-Object System.Drawing.Point(300, 270)
 $deny.Size = New-Object System.Drawing.Size(118, 34)
 $deny.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
 $form.Controls.Add($deny)
@@ -129,7 +255,7 @@ $form.Controls.Add($deny)
 $allow = New-Object System.Windows.Forms.Button
 # "&A" gives the Alt+A mnemonic; there is deliberately no Enter shortcut.
 $allow.Text = T 'Allow (&A)' '允许 (&A)'
-$allow.Location = New-Object System.Drawing.Point(426, 252)
+$allow.Location = New-Object System.Drawing.Point(426, 270)
 $allow.Size = New-Object System.Drawing.Size(118, 34)
 $form.Controls.Add($allow)
 
@@ -156,6 +282,14 @@ $timer.Add_Tick({
         return
     }
     $countdown.Text = if ($zh) { "还有 $left 秒自动拒绝" } else { "auto-deny in $left s" }
+
+    # Show bypass attempts instead of hiding them.
+    if (('DshInputGuard' -as [type]) -and [DshInputGuard]::Swallowed -gt 0) {
+        $n = [DshInputGuard]::Swallowed
+        $injectNote.Text = if ($zh) { "已忽略 $n 次注入的键鼠输入（不是你在操作）" } `
+                           else { "ignored $n injected input event(s) - not you" }
+        $injectNote.Visible = $true
+    }
 })
 $timer.Start()
 
@@ -170,6 +304,12 @@ $answer = $form.ShowDialog()
 $timer.Stop()
 $timer.Dispose()
 $form.Dispose()
+
+if ('DshInputGuard' -as [type]) {
+    try { [DshInputGuard]::Uninstall() } catch { }
+    $swallowed = [DshInputGuard]::Swallowed
+    Write-Output "injected-swallowed=$swallowed"
+}
 
 if ($script:result -eq 2) { exit 2 }
 if ($script:result -eq 4) { exit 4 }

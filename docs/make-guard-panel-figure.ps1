@@ -1,4 +1,4 @@
-# 生成 README 用的防护面板截图：打开面板 → 按窗口矩形精确截取 → 放大 2 倍保存。
+﻿# 生成 README 用的防护面板截图：打开面板 → 按窗口矩形精确截取 → 放大 2 倍保存。
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @'
@@ -45,7 +45,7 @@ if ($h -eq [IntPtr]::Zero) { Write-Output 'PANEL_NOT_FOUND'; exit 1 }
 
 $r = New-Object WinCap2+RECT
 [void][WinCap2]::GetWindowRect($h, [ref]$r)
-$w = $r.R - $r.L; $hh = $r.B - $r.T
+$w = $r.R - $r.L; $hh = $r.B - $r.T - 18   # trim the DWM shadow strip below the form
 Write-Output "panel rect: $($r.L),$($r.T) ${w}x${hh}"
 
 Start-Sleep -Milliseconds 400

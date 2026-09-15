@@ -1,4 +1,4 @@
-# 生成 README 用的审批弹窗截图：启动对话框 → 按窗口实际矩形精确截取 → 放大 2 倍保存。
+﻿# 生成 README 用的审批弹窗截图：启动对话框 → 按窗口实际矩形精确截取 → 放大 2 倍保存。
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @'
@@ -33,13 +33,16 @@ $out = "$d\docs"
 
 # 起一个演示用的对话框（20 秒后自动关闭）
 # 注意：不能加 -WindowStyle Hidden —— 它会让对话框本身也不可见
+# -BlockInjected 1 是服务端的默认值（policy.approval.require_physical_input），
+# 截图要反映用户实际会看到的那一行提示。
 Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList `
   '-NoProfile', '-File', "`"$d\approval.ps1`"",
   '-Action', 'click_element',
   '-Target', '"chrome  |  Online Banking - Transfer"',
   '-Detail', '"automation_id=submitButton,  name=确认转账"',
   '-Reason', '"target window title looks sensitive"',
-  '-TimeoutMs', '20000'
+  '-TimeoutMs', '20000',
+  '-BlockInjected', '1'
 
 $h = [IntPtr]::Zero
 for ($i = 0; $i -lt 40; $i++) {
