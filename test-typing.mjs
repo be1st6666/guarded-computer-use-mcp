@@ -181,13 +181,24 @@ if (aborted) {
   failed++;
 }
 
-// --- 3. 清理：只结束"我们启动出来的"记事本进程（启动前后 PID 差集） ---
+// --- 3. 清理：只结束"我们启动出来的"记事本进程 ---
+// 两个判据都要，缺一不可：启动前后的 PID 差集（正常情况下够用），以及"窗口标题
+// 里带我们这个唯一文件名的进程"（如果进程在我们拍快照之后才注册，或者记事本把
+// 我们那个文档并进了别的进程/标签页，差集就漏掉它 —— 曾经真的留下过一个窗口）。
 try {
-  const started = [...notepadPids()].filter((p) => !pidsBefore.has(p));
+  const started = new Set([...notepadPids()].filter((p) => !pidsBefore.has(p)));
+  try {
+    const windows = jsonOf(await call('list_windows', {})) ?? [];
+    for (const w of windows) {
+      if (String(w.title ?? '').includes(marker) && w.pid) started.add(String(w.pid));
+    }
+  } catch {
+    /* 拿不到窗口列表就只靠 PID 差集 */
+  }
   for (const pid of started) {
     spawnSync('taskkill', ['/PID', pid, '/F'], { stdio: 'ignore' });
   }
-  if (started.length === 0) console.log('note: no Notepad process of ours to close (already exited)');
+  if (started.size === 0) console.log('note: no Notepad process of ours to close (already exited)');
 } catch {
   /* 清理失败不影响结论 */
 }
